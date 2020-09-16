@@ -1,0 +1,100 @@
+---
+title: "Exploration of CLL dataset"
+output: html_notebook
+---
+
+load libraries
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(biomaRt)
+```
+
+load data
+```{r}
+CCLE_mutations <- read_delim("/Users/leti/Desktop/Thesis/Datasets/Depmap/CCLE_mutations.csv", 
+    "\t", escape_double = FALSE, trim_ws = TRUE)
+#head(CCLE_mutations)
+
+sample_info <- read_csv("/Users/leti/Desktop/Thesis/Datasets/Depmap/sample_info.csv")
+#head(sample_info)
+```
+
+merge both datasets (by DepMap_ID)
+```{r}
+joined_CCLE <- right_join(CCLE_mutations, sample_info, by = "DepMap_ID", copy = TRUE, suffix = c(".CCL", ".info"))
+```
+
+Distribution of cancer types across cell lines
+```{r}
+ggplot(data=joined_CCLE) +
+  geom_bar(mapping = aes(x = primary_disease, fill = primary_or_metastasis)) +
+  coord_flip() + 
+  xlab(NULL) + 
+  labs(fill = "Primary or Metastasis")
+  #(axis.text.x = element_text(angle = 90)) +       #rotate the label
+ 
+```
+
+Repeat the plot above with counts normalized by number of cell lines studied
+```{r}
+cell_lines_studied <- joined_CCLE %>% 
+  group_by(primary_disease) %>% count(CCLE_Name) %>% rename(observed_mutations = n)
+
+joined_CCLE %>% 
+  group_by(primary_disease) %>% 
+  mutate(no_cell_lines = length(CCLE_Name),
+         tot_mut_cell_line = length())
+  
+#count the number of cell lines per cancer type 
+normalize <- cell_lines_studied %>% 
+  count(primary_disease) %>% rename(cell_lines_number = n)
+
+cell_lines_distribution <- cell_lines_studied %>% 
+  count(primary_disease, wt = observed_mutations) %>% rename(observed_mutation_all_cell_lines = n) 
+
+
+
+```
+
+Show distribution of cell lines across the different cancer types (how many cell lines have been studied per cancer)
+```{r}
+ggplot(data = cell_lines_studied) +
+  geom_bar(mapping = aes(x = primary_disease)) + 
+  coord_flip() + 
+  xlab(NULL) + 
+  ylab("Number of cell lines studied") 
+   
+```
+
+
+```{r}
+cell_lines_distribution <- right_join(cell_lines_distribution, normalize, by = "primary_disease", copy = TRUE)
+
+cell_lines_distribution %>% 
+  select(observed_mutation_all_cell_lines, cell_lines_number) %>% 
+  mutate(normalized_mutations = observed_mutation_all_cell_lines / cell_lines_number) -> cell_lines_distribution
+
+ggplot(data = cell_lines_distribution) +
+  geom_col(mapping = aes(x = primary_disease, y = normalized_mutations)) + 
+  coord_flip() + 
+  xlab(NULL) + 
+  ylab("Observed mutations normalized for cell lines studied")
+```
+Subset pancreatic cancer, cell lines used
+```{r}
+
+joined_CCLE %>% 
+  filter(primary_disease == "Pancreatic Cancer") -> pancreatic_cancer
+
+head(pancreatic_cancer)
+```
+
+Retrieve database with HUGO symbol nomenclature 
+```{r}
+ensmbl_ID = 
+
+
+
+```
+
