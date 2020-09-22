@@ -8,6 +8,7 @@ load libraries
 library(tidyverse)
 library(readr)
 library(biomaRt)
+select = dplyr::select
 ```
 
 load data
@@ -101,8 +102,11 @@ ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 
 Fetch gene symbols, to be used instead of gene ensembl id
 ```{r}
-
-id_list <- pull(joined_CCLE, Hugo_Symbol) #create vector with the Hugo Symbols that we want 
+#create vector with the Hugo Symbols that we want
+id_list = joined_CCLE %>% 
+  select(Hugo_Symbol) %>% 
+  distinct() %>% 
+  pull(Hugo_Symbol)
 
 genes_list <- getBM(filters= "hgnc_id", attributes= c("ensembl_gene_id",
 "hgnc_symbol", "description"), values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
