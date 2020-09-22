@@ -11,7 +11,7 @@ library(biomaRt)
 ```
 
 load data
-```{r}
+```{r, message=FALSE, include=FALSE}
 CCLE_mutations <- read_delim("/Users/leti/Desktop/Thesis/Datasets/Depmap/CCLE_mutations.csv", 
     "\t", escape_double = FALSE, trim_ws = TRUE)
 #head(CCLE_mutations)
@@ -41,11 +41,6 @@ Repeat the plot above with counts normalized by number of cell lines studied
 cell_lines_studied <- joined_CCLE %>% 
   group_by(primary_disease) %>% count(CCLE_Name) %>% rename(observed_mutations = n)
 
-joined_CCLE %>% 
-  group_by(primary_disease) %>% 
-  mutate(no_cell_lines = length(CCLE_Name),
-         tot_mut_cell_line = length())
-  
 #count the number of cell lines per cancer type 
 normalize <- cell_lines_studied %>% 
   count(primary_disease) %>% rename(cell_lines_number = n)
@@ -72,7 +67,6 @@ ggplot(data = cell_lines_studied) +
 cell_lines_distribution <- right_join(cell_lines_distribution, normalize, by = "primary_disease", copy = TRUE)
 
 cell_lines_distribution %>% 
-  select(observed_mutation_all_cell_lines, cell_lines_number) %>% 
   mutate(normalized_mutations = observed_mutation_all_cell_lines / cell_lines_number) -> cell_lines_distribution
 
 ggplot(data = cell_lines_distribution) +
@@ -81,6 +75,7 @@ ggplot(data = cell_lines_distribution) +
   xlab(NULL) + 
   ylab("Observed mutations normalized for cell lines studied")
 ```
+
 Subset pancreatic cancer, cell lines used
 ```{r}
 
@@ -92,9 +87,24 @@ head(pancreatic_cancer)
 
 Retrieve database with HUGO symbol nomenclature 
 ```{r}
-ensmbl_ID = 
+#ensembl <- useMart("ensembl")
+#datasets <- listDatasets(ensembl)
+#view(datasets)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+
+#get list of all available filters
+#filters <- listFilters(ensembl) 
+
+```
 
 
+Fetch gene symbols, to be used instead of gene ensembl id
+```{r}
 
+id_list <- pull(joined_CCLE, Hugo_Symbol) #create vector with the Hugo Symbols that we want 
+
+genes_list <- getBM(filters= "hgnc_id", attributes= c("ensembl_gene_id",
+"hgnc_symbol", "description"), values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
 ```
 
