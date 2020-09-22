@@ -108,7 +108,7 @@ id_list = joined_CCLE %>%
   distinct() %>% 
   pull(Hugo_Symbol)
 
-genes_list <- getBM(filters= "hgnc_id", attributes= c("ensembl_gene_id",
+genes_list <- getBM(filters= "hgnc_symbol", attributes= c("ensembl_gene_id",
 "hgnc_symbol", "description"), values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
 ```
 
