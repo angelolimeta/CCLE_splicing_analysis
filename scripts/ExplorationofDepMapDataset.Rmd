@@ -12,11 +12,11 @@ library(biomaRt)
 
 load data
 ```{r, message=FALSE, include=FALSE}
-CCLE_mutations <- read_delim("/Users/leti/Desktop/Thesis/Datasets/Depmap/CCLE_mutations.csv", 
+CCLE_mutations <- read_delim("../data/CCLE_mutations.csv", 
     "\t", escape_double = FALSE, trim_ws = TRUE)
 #head(CCLE_mutations)
 
-sample_info <- read_csv("/Users/leti/Desktop/Thesis/Datasets/Depmap/sample_info.csv")
+sample_info <- read_csv("../data/sample_info.csv")
 #head(sample_info)
 ```
 
