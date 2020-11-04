@@ -8,6 +8,14 @@ load libraries
 library(tidyverse)
 library(readr)
 library(biomaRt)
+library(cowplot)
+library(ggpubr)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(hrbrthemes)
+library(wesanderson)
+library(EDASeq)
 select = dplyr::select
 ```
 
@@ -25,20 +33,37 @@ merge both datasets (by DepMap_ID)
 ```{r}
 joined_CCLE <- right_join(CCLE_mutations, sample_info, by = "DepMap_ID", copy = TRUE, suffix = c(".CCL", ".info"))
 ```
+export to csv
+```{r}
+#write.csv(joined_CCLE,"/Users/castilln/Desktop/thesis/localdata/CCLE_info", row.names = FALSE)
+```
 
 Distribution of cancer types across cell lines
 ```{r}
 ggplot(data=joined_CCLE) +
   geom_bar(mapping = aes(x = primary_disease, fill = primary_or_metastasis)) +
-  coord_flip() + 
   xlab(NULL) + 
-  labs(fill = "Primary or Metastasis")
+  ylab(NULL) + 
+  labs(fill = "Primary or Metastasis") + 
+  ggtitle("Number of primary and metastatic cancer in each cell line") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 3, type = "discrete"),na.value ="grey") +
+  coord_flip() 
   #(axis.text.x = element_text(angle = 90)) +       #rotate the label
  
 ```
 
 Repeat the plot above with counts normalized by number of cell lines studied
 ```{r}
+#count observed mutations per cell line
 cell_lines_studied <- joined_CCLE %>% 
   group_by(primary_disease) %>% count(CCLE_Name) %>% rename(observed_mutations = n)
 
@@ -46,21 +71,31 @@ cell_lines_studied <- joined_CCLE %>%
 normalize <- cell_lines_studied %>% 
   count(primary_disease) %>% rename(cell_lines_number = n)
 
+#observed mutations across the cell lines
 cell_lines_distribution <- cell_lines_studied %>% 
   count(primary_disease, wt = observed_mutations) %>% rename(observed_mutation_all_cell_lines = n) 
-
-
 
 ```
 
 Show distribution of cell lines across the different cancer types (how many cell lines have been studied per cancer)
 ```{r}
 ggplot(data = cell_lines_studied) +
-  geom_bar(mapping = aes(x = primary_disease)) + 
-  coord_flip() + 
+  geom_bar(mapping = aes(x = primary_disease))+ 
   xlab(NULL) + 
-  ylab("Number of cell lines studied") 
-   
+  ylab("Number of cell lines studied")+ 
+  ggtitle("Number of primary and metastatic cancer in each cell line") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  #scale_color_manual(values = wes_palette("GrandBudapest1", n = 1, type = "discrete"),na.value ="grey") +
+  coord_flip() 
+ 
 ```
 
 
@@ -79,7 +114,6 @@ ggplot(data = cell_lines_distribution) +
 
 Subset pancreatic cancer, cell lines used
 ```{r}
-
 joined_CCLE %>% 
   filter(primary_disease == "Pancreatic Cancer") -> pancreatic_cancer
 
@@ -108,7 +142,33 @@ id_list = joined_CCLE %>%
   distinct() %>% 
   pull(Hugo_Symbol)
 
+#gene list with hugo symbol and entrez id / ensembl id 
 genes_list <- getBM(filters= "hgnc_symbol", attributes= c("ensembl_gene_id",
 "hgnc_symbol", "description"), values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+```
+
+normalize the amount of mutations by length of the gene
+```{r}
+#count mutations per gene and cancer
+joined_CCLE %>% 
+  group_by(Hugo_Symbol, primary_disease) %>% tally() 
+
+#create a list with ensembl ids
+ensembl_list <- genes_list %>% 
+  pull(ensembl_gene_id) %>% 
+  as_vector()
+
+#retrieve gene length and gc content 
+length <- getGeneLengthAndGCContent(ensembl_list, "hsa")
+
+#transform rows into variable
+
+#merge length and gc content with hugo symbol & gene info
+right_join(genes_list, length, by = "ensembl_gene_id", copy = TRUE) -> gene_lenght_list
+
+joined_CCLE %>% 
+  group_by(Hugo_Symbol) %>% 
+  mutate(gene_length = End_position - Start_position) %>% 
+  select(Hugo_Symbol, gene_length) -> normalize_length
 ```
 

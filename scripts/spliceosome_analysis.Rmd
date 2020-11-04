@@ -1,0 +1,172 @@
+---
+title: "Spliceosome mutations"
+author: "Leticia Castillon"
+date: "27-10-20"
+output: html_notebook
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(biomaRt)
+library(cowplot)
+library(ggpubr)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(hrbrthemes)
+library(wesanderson)
+library(data.table)
+library(KEGGREST)
+library(tidyHeatmap)
+select = dplyr::select
+```
+
+Read data: list of mutations from CCLE and list of genes that are part of the spliceosome machinery
+```{r}
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/CCLE_info", header = TRUE) #mutations and sample info 
+
+splicing_major_genes_list <- fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-major-spliceosome.csv", header = TRUE) #from HGCN, major spliceosome genes
+splicing_major_genes_list %>% 
+  rename("Hugo_Symbol" = "Approved symbol") -> splicing_major_genes_list
+
+splicing_minor_genes_list <- fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-minor-spliceosome.csv", header = TRUE) #from HGCN, minor spliceosome genes
+splicing_minor_genes_list %>% 
+  rename("Hugo_Symbol" = "Approved symbol") -> splicing_major_genes_list
+  
+splicing_gene_list <- full_join(splicing_major_genes_list, splicing_minor_genes_list) #merge both lists for spliceosome genes
+```
+
+filter mutations present in spliceosome genes
+```{r}
+inner_join(CCLE_mutations, splicing_gene_list, by = "Hugo_Symbol") %>% #dataframe only with mutations in spliceosomal genes
+  select(Hugo_Symbol, Variant_Classification, Variant_Type, CCLE_Name, primary_or_metastasis, primary_disease, Subtype, Group) %>% #select variables of interest
+  filter(Variant_Classification != "Silent") %>% 
+  filter(Variant_Type != "SNP") -> spliceosome_mutations_ccle #select for those mutations that are non silent 
+
+```
+
+normalization for number of cell lines studied for each cancer 
+```{r}
+CCLE_mutations %>% 
+  group_by(primary_disease) %>% 
+  distinct(CCLE_Name) %>% 
+  count(primary_disease) %>% #count n of distinct cell lines for each cancer
+  rename(cell_lines_number = n) -> normalize
+
+#CCLE_mutations_norm <- right_join(CCLE_mutations, normalize, by = "primary_disease", copy = TRUE)
+
+#cell_lines_distribution <- cell_lines_studied %>% 
+ #count(primary_disease, wt = observed_mutations) %>% rename(observed_mutation_all_cell_lines = n) 
+```
+
+query kegg and obtain hugo symbols for the genes belonging to spliceosome pathway
+```{r}
+query <- keggGet(c("hsa03040")) #get spliceosome pathway
+
+res <- keggLink("hsa", "path:hsa03040") #get all genes part of the spliceosome pathway
+res <- as.list(res)
+
+ncbi_id <- vector(mode = "character", length = length(res)) #initialize empty vector with same size as nr of genes in spliceosome pathway
+
+for (i in 1:length(res)){
+  gene = res[i] #access each gene individually
+  ncbi_id[i] = keggConv("ncbi-geneid", gene) #get ncbi id correspondent to each gene
+}
+ncbi_id = as.vector(str_remove(ncbi_id, "ncbi-geneid:")) #get only identifier
+
+#obtain hugo symbol
+genes_list <- getBM(filters= "entrezgene_id", attributes= c("entrezgene_id",
+"hgnc_symbol", "description"), values = ncbi_id, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))) 
+```
+
+spliceosome genes from kegg pathway mutated in ccle db
+```{r}
+genes_list %>% 
+  rename("Hugo_Symbol" = "hgnc_symbol") -> kegg_genes_list
+
+inner_join(CCLE_mutations, kegg_genes_list, by = "Hugo_Symbol") %>% #dataframe only with mutations in spliceosomal genes
+select(Hugo_Symbol, Variant_Classification, Variant_Type, CCLE_Name, primary_or_metastasis, primary_disease, Subtype) %>% #select variables of interest
+filter(Variant_Classification != "Silent" && Variant_Type != "SNP")  -> kegg_spliceosome_mutations_ccle #select for those mutations that are non silent 
+
+```
+
+bind both dataframes and remove duplicate rows
+```{r}
+#first we need to add "Group" variable to the kegg df and set variables to NA
+kegg_spliceosome_mutations_ccle %>% 
+  mutate(Group = "NA") -> kegg_spliceosome_mutations_ccle
+
+#bind both dataframes and eliminate duplicates
+rbind(spliceosome_mutations_ccle, kegg_spliceosome_mutations_ccle) %>% 
+  filter(Variant_Type != "SNP") %>% 
+  distinct() -> full_spliceosome_mutations
+```
+
+count number of mutations for a gene across different cancers
+```{r}
+full_spliceosome_mutations %>% 
+  group_by(primary_disease) %>% #group by cancer
+  count(Hugo_Symbol) %>% #count nr of mutations for each gene/cancer
+  rename(observed_mutations = n) %>%
+  right_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
+  mutate(norm_mutations_per_gene = observed_mutations / cell_lines_number) -> full_norm_mutations  #normalize the observed mutations in each gene by the number of cell lines studied for each cancer
+full_norm_mutations %>%   
+  group_by(primary_disease) %>% 
+  count(primary_disease, wt = observed_mutations) %>% #count the number of mutations per cancer
+  rename(obs_mutat_per_cancer = n) %>% 
+  right_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
+  mutate(norm_mut_per_cancer = obs_mutat_per_cancer / cell_lines_number) %>%
+  right_join(full_norm_mutations, by = "primary_disease") -> full_norm_mutations
+
+
+
+ggplot(data=full_norm_mutations, aes(x = reorder(primary_disease, norm_mut_per_cancer), y = norm_mutations_per_gene, fill = Hugo_Symbol)) +
+  geom_bar(stat = "identity") +
+  xlab(NULL) + 
+  ylab(NULL) + 
+  ggtitle("Number mutations of spliceosome components") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip() 
+```
+Prepare for heatmap
+pivot wider
+```{r}
+full_norm_mutations %>% 
+  select(Hugo_Symbol,primary_disease, norm_mutations_per_gene) %>% 
+  pivot_wider(id_cols = NULL, names_from = primary_disease, values_from = norm_mutations_per_gene)%>% 
+  filter(!is.na(Hugo_Symbol)) -> df #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df[is.na(df)] <- 0 #convert na values in 0
+
+```
+
+tidy heatmap
+```{r}
+df %>%
+  select(-c(Engineered, Unknown)) %>% 
+  rename("Gene" = "Hugo_Symbol") -> df #remove Engineered and Unknown classes
+
+df[ , colSums(is.na(df)) == 0] -> df #drop columns containing na values
+  
+df %>% 
+  pivot_longer(cols = !Gene,  names_to = "Disease", values_to = "Relative mutation") -> df_tidy
+
+#heatmap
+df_tidy %>%
+  heatmap(Gene, Disease, `Relative mutation`) -> hm
+hm
+
+```
+
+
+
