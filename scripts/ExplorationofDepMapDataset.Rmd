@@ -10,6 +10,7 @@ library(readr)
 library(biomaRt)
 library(cowplot)
 library(ggpubr)
+library(data.table)
 library(ggsci)
 library(ggrepel)
 library(ggExtra)
@@ -17,6 +18,7 @@ library(hrbrthemes)
 library(wesanderson)
 library(EDASeq)
 select = dplyr::select
+count = dplyr::count
 ```
 
 load data
@@ -65,15 +67,15 @@ Repeat the plot above with counts normalized by number of cell lines studied
 ```{r}
 #count observed mutations per cell line
 cell_lines_studied <- joined_CCLE %>% 
-  group_by(primary_disease) %>% count(CCLE_Name) %>% rename(observed_mutations = n)
+  group_by(primary_disease) %>% count(CCLE_Name) %>% rename("n" = "observed_mutations")
 
 #count the number of cell lines per cancer type 
 normalize <- cell_lines_studied %>% 
-  count(primary_disease) %>% rename(cell_lines_number = n)
+  count(primary_disease) %>% rename("n" = "cell_lines_number")
 
 #observed mutations across the cell lines
 cell_lines_distribution <- cell_lines_studied %>% 
-  count(primary_disease, wt = observed_mutations) %>% rename(observed_mutation_all_cell_lines = n) 
+  count(primary_disease, wt = observed_mutations) %>% rename("n" = "observed_mutation_all_cell_lines") 
 
 ```
 
@@ -151,24 +153,62 @@ normalize the amount of mutations by length of the gene
 ```{r}
 #count mutations per gene and cancer
 joined_CCLE %>% 
-  group_by(Hugo_Symbol, primary_disease) %>% tally() 
+  group_by(Hugo_Symbol, primary_disease) %>% tally() %>% 
+  rename("n" = "nr of mutations") -> mut_per_gene_cancer 
 
-#create a list with ensembl ids
 ensembl_list <- genes_list %>% 
   pull(ensembl_gene_id) %>% 
   as_vector()
 
 #retrieve gene length and gc content 
 length <- getGeneLengthAndGCContent(ensembl_list, "hsa")
+as.data.frame(length) -> length
 
 #transform rows into variable
+setDT(length, keep.rownames = "ensembl_gene_id")[]
 
 #merge length and gc content with hugo symbol & gene info
-right_join(genes_list, length, by = "ensembl_gene_id", copy = TRUE) -> gene_lenght_list
+right_join(genes_list, length, by = "ensembl_gene_id", copy = TRUE) %>% 
+  select(hgnc_symbol, length) %>% 
+  rename("hgnc_symbol" = "Hugo_Symbol")-> gene_lenght_list
 
+left_join(mut_per_gene_cancer, gene_lenght_list, by="Hugo_Symbol") %>% 
+  mutate(norm_mutations = `nr of mutations`/length) -> norm_mut_per_gene_cancer
+
+```
+
+find most mutated genes per cancer
+```{r}
+norm_mut_per_gene_cancer %>% 
+  arrange(desc(norm_mutations)) %>%
+  group_by(primary_disease) %>% 
+  top_n(3) %>% 
+  ggplot(aes(x = primary_disease, y = norm_mutations, fill = Hugo_Symbol)) +
+  geom_col() + 
+  #geom_text(aes(label = Hugo_Symbol)) +
+  coord_flip() + 
+  xlab(NULL) + 
+  ylab("Most mutated genes per cancer")
+```
+most mutated genes across all cancers
+```{r}
 joined_CCLE %>% 
+  filter(Variant_Classification!= "Silent") %>% 
   group_by(Hugo_Symbol) %>% 
-  mutate(gene_length = End_position - Start_position) %>% 
-  select(Hugo_Symbol, gene_length) -> normalize_length
+  tally() %>% 
+  rename("n" = "observed_mutations") %>% 
+  left_join(gene_lenght_list, by = "Hugo_Symbol") %>% 
+  mutate(normalized_mutations = observed_mutations/length) %>% 
+  arrange(desc(normalized_mutations)) %>% 
+  top_n(50) -> most_mutated_genes
+
+most_mutated_genes %>% 
+  ggplot(aes(x = reorder(Hugo_Symbol, normalized_mutations), y = normalized_mutations)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw()+ 
+  xlab(NULL) +
+  ylab("Most mutated genes across cancer cell lines")
+
 ```
 

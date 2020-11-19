@@ -21,6 +21,7 @@ library(data.table)
 library(KEGGREST)
 library(tidyHeatmap)
 select = dplyr::select
+rename = dplyr::rename
 ```
 
 Read data: list of mutations from CCLE and list of genes that are part of the spliceosome machinery
@@ -33,7 +34,7 @@ splicing_major_genes_list %>%
 
 splicing_minor_genes_list <- fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-minor-spliceosome.csv", header = TRUE) #from HGCN, minor spliceosome genes
 splicing_minor_genes_list %>% 
-  rename("Hugo_Symbol" = "Approved symbol") -> splicing_major_genes_list
+   rename("Hugo_Symbol" = "Approved symbol") -> splicing_major_genes_list
   
 splicing_gene_list <- full_join(splicing_major_genes_list, splicing_minor_genes_list) #merge both lists for spliceosome genes
 ```
@@ -41,7 +42,7 @@ splicing_gene_list <- full_join(splicing_major_genes_list, splicing_minor_genes_
 filter mutations present in spliceosome genes
 ```{r}
 inner_join(CCLE_mutations, splicing_gene_list, by = "Hugo_Symbol") %>% #dataframe only with mutations in spliceosomal genes
-  select(Hugo_Symbol, Variant_Classification, Variant_Type, CCLE_Name, primary_or_metastasis, primary_disease, Subtype, Group) %>% #select variables of interest
+  select(Hugo_Symbol, Variant_Classification, Variant_Type, stripped_cell_line_name, primary_or_metastasis, primary_disease, Subtype, Group, Variant_annotation) %>% #select variables of interest
   filter(Variant_Classification != "Silent") %>% 
   filter(Variant_Type != "SNP") -> spliceosome_mutations_ccle #select for those mutations that are non silent 
 
@@ -51,9 +52,9 @@ normalization for number of cell lines studied for each cancer
 ```{r}
 CCLE_mutations %>% 
   group_by(primary_disease) %>% 
-  distinct(CCLE_Name) %>% 
-  count(primary_disease) %>% #count n of distinct cell lines for each cancer
-  rename(cell_lines_number = n) -> normalize
+  dplyr::distinct(stripped_cell_line_name) %>% 
+  dplyr::count(primary_disease) %>% #count n of distinct cell lines for each cancer #sometimes problems with masking of function
+  rename("cell_lines_number" = "n") -> normalize_cell_lines
 
 #CCLE_mutations_norm <- right_join(CCLE_mutations, normalize, by = "primary_disease", copy = TRUE)
 
@@ -83,16 +84,17 @@ genes_list <- getBM(filters= "entrezgene_id", attributes= c("entrezgene_id",
 
 spliceosome genes from kegg pathway mutated in ccle db
 ```{r}
+#gene list from kegg with hugo symbol as ID
 genes_list %>% 
   rename("Hugo_Symbol" = "hgnc_symbol") -> kegg_genes_list
 
-inner_join(CCLE_mutations, kegg_genes_list, by = "Hugo_Symbol") %>% #dataframe only with mutations in spliceosomal genes
-select(Hugo_Symbol, Variant_Classification, Variant_Type, CCLE_Name, primary_or_metastasis, primary_disease, Subtype) %>% #select variables of interest
-filter(Variant_Classification != "Silent" && Variant_Type != "SNP")  -> kegg_spliceosome_mutations_ccle #select for those mutations that are non silent 
+inner_join(CCLE_mutations, kegg_genes_list, by = "Hugo_Symbol") %>%  #include genes present in CCLE and in KEGG pathway: only spliceosomal genes
+dplyr::select(Hugo_Symbol, Variant_Classification, Variant_Type, stripped_cell_line_name, primary_or_metastasis, primary_disease, Subtype, Variant_annotation) %>% #select variables of interest
+filter(Variant_Classification != "Silent" | Variant_Type != "SNP")  -> kegg_spliceosome_mutations_ccle #select for those mutations that are non silent 
 
 ```
 
-bind both dataframes and remove duplicate rows
+bind both dataframes: account for all spliceosome mutations; and remove duplicate rows
 ```{r}
 #first we need to add "Group" variable to the kegg df and set variables to NA
 kegg_spliceosome_mutations_ccle %>% 
@@ -100,23 +102,34 @@ kegg_spliceosome_mutations_ccle %>%
 
 #bind both dataframes and eliminate duplicates
 rbind(spliceosome_mutations_ccle, kegg_spliceosome_mutations_ccle) %>% 
-  filter(Variant_Type != "SNP") %>% 
+  filter(Variant_Type != "SNP" | Variant_Type != "Silent") %>% 
   distinct() -> full_spliceosome_mutations
+```
+
+normalize by number of cell lines
+```{r}
+#count observed mutations per cell line
+cell_lines_studied <- CCLE_mutations %>% 
+  group_by(primary_disease) %>% count(CCLE_Name) %>% rename("observed_mutations" = "n")
+
+#count the number of cell lines per cancer type 
+normalize <- cell_lines_studied %>% 
+  count(primary_disease) %>% rename("cell_lines_number" = "n")
 ```
 
 count number of mutations for a gene across different cancers
 ```{r}
 full_spliceosome_mutations %>% 
   group_by(primary_disease) %>% #group by cancer
-  count(Hugo_Symbol) %>% #count nr of mutations for each gene/cancer
-  rename(observed_mutations = n) %>%
-  right_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
+  dplyr::count(Hugo_Symbol) %>% #count nr of mutations for each gene/cancer
+  rename("observed_mutations" = "n") %>%
+  left_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
   mutate(norm_mutations_per_gene = observed_mutations / cell_lines_number) -> full_norm_mutations  #normalize the observed mutations in each gene by the number of cell lines studied for each cancer
 full_norm_mutations %>%   
   group_by(primary_disease) %>% 
-  count(primary_disease, wt = observed_mutations) %>% #count the number of mutations per cancer
-  rename(obs_mutat_per_cancer = n) %>% 
-  right_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
+  dplyr::count(primary_disease, wt = observed_mutations) %>% #count the number of mutations per cancer
+  rename("obs_mutat_per_cancer" = "n") %>% 
+  left_join(normalize, by = "primary_disease") %>% #join the nr of cell lines studied 
   mutate(norm_mut_per_cancer = obs_mutat_per_cancer / cell_lines_number) %>%
   right_join(full_norm_mutations, by = "primary_disease") -> full_norm_mutations
 
@@ -138,6 +151,7 @@ ggplot(data=full_norm_mutations, aes(x = reorder(primary_disease, norm_mut_per_c
         ) +
   coord_flip() 
 ```
+
 Prepare for heatmap
 pivot wider
 ```{r}
@@ -152,9 +166,11 @@ df[is.na(df)] <- 0 #convert na values in 0
 
 tidy heatmap
 ```{r}
+#heatmap of number of mutations for each gene across cancer: only non-silent and non-SNP mutations
+
 df %>%
   select(-c(Engineered, Unknown)) %>% 
-  rename("Gene" = "Hugo_Symbol") -> df #remove Engineered and Unknown classes
+  rename("Gene"="Hugo_Symbol") -> df #remove Engineered and Unknown classes
 
 df[ , colSums(is.na(df)) == 0] -> df #drop columns containing na values
   
@@ -163,10 +179,160 @@ df %>%
 
 #heatmap
 df_tidy %>%
-  heatmap(Gene, Disease, `Relative mutation`) -> hm
-hm
+  heatmap(Gene, Disease, `Relative mutation`) -> htm
+
+htm
+```
+analysis for individual cell lines
+```{r}
+full_spliceosome_mutations %>%
+  group_by(stripped_cell_line_name) %>% #group by cell line
+  dplyr::count(Hugo_Symbol) %>% #count nr of mutations for each gene/cell_line
+  rename("observed_mutations" = "n") -> full_mut_cell_line  
+```
+
+Prepare for heatmap
+pivot wider
+```{r}
+full_mut_cell_line %>% 
+  ungroup() %>% 
+  pivot_wider(id_cols = Hugo_Symbol, names_from = stripped_cell_line_name, values_from = observed_mutations)%>% 
+  filter(!is.na(Hugo_Symbol))  -> df_cell_lines #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df_cell_lines[is.na(df_cell_lines)] <- 0 #convert na values in 0
 
 ```
 
+tidy heatmap
+```{r}
+#heatmap with amount of mutations for each spliceosomal gene across cell lines
+df_cell_lines %>%
+  rename("Gene" = "Hugo_Symbol") -> df_cell_lines #remove Engineered and Unknown classes
 
+df_cell_lines[ , colSums(is.na(df_cell_lines)) == 0] -> df_cell_lines #drop columns containing na values
+  
+df_cell_lines %>% 
+  pivot_longer(cols = !Gene,  names_to = "Cell line", values_to = "Relative mutation") -> df_tidy
+
+#heatmap
+df_tidy %>%
+  heatmap(Gene, `Cell line`, `Relative mutation`) -> htm_cell_lines
+
+htm_cell_lines
+
+```
+
+repeat heatmap only for damaging mutations (according to variant_annotation variable)
+```{r}
+full_spliceosome_mutations %>%
+  filter(Variant_annotation == "damaging") %>% 
+  group_by(stripped_cell_line_name) %>% #group by cell line
+  dplyr::count(Hugo_Symbol) %>% #count nr of mutations for each gene/cell_line
+  rename("observed_mutations" = "n") -> full_mut_cell_line_damaging  
+
+full_mut_cell_line_damaging %>% 
+  ungroup() %>% 
+  pivot_wider(id_cols = Hugo_Symbol, names_from = stripped_cell_line_name, values_from = observed_mutations)%>% 
+  filter(!is.na(Hugo_Symbol))  -> df_cell_lines_dam #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df_cell_lines_dam[is.na(df_cell_lines_dam)] <- 0 #convert na values in 0
+
+```
+
+tidy heatmap
+```{r}
+#heatmap with amount of mutations for each spliceosomal gene across cell lines
+df_cell_lines_dam %>%
+  rename("Gene" ="Hugo_Symbol") -> df_cell_lines_dam 
+
+df_cell_lines_dam[ , colSums(is.na(df_cell_lines_dam)) == 0] -> df_cell_lines_dam #drop columns containing na values
+  
+df_cell_lines_dam %>% 
+  pivot_longer(cols = !Gene,  names_to = "Cell line", values_to = "Relative mutation") -> df_tidy_dam
+
+#heatmap
+df_tidy_dam %>%
+  heatmap(Gene, `Cell line`, `Relative mutation`) -> htm_cell_lines_dam
+
+htm_cell_lines_dam
+
+```
+
+```{r}
+CCLE_mutations %>% 
+  dplyr::select(Hugo_Symbol, Variant_Classification, Variant_Type, Variant_annotation) -> CCLE_annotations
+```
+
+redo heatmap only with presence or absence of spliceosomal mutation in the cell lines
+```{r}
+genes_list %>% #spliceosomal genes from kegg
+  rename("Hugo_Symbol" = "hgnc_symbol") -> genes_list
+CCLE_mutations %>%
+  filter(isDeleterious == TRUE | Variant_Type != "SNP") %>% #we want to make sure that we only get cell lines with a damaging mutation
+  dplyr::select(Hugo_Symbol, Variant_Classification, Variant_Type, stripped_cell_line_name, primary_disease, primary_or_metastasis) -> CCLE_deleterious
+
+CCLE_deleterious %>% 
+  mutate(mutated = 
+           case_when(
+            CCLE_deleterious$Hugo_Symbol %in% genes_list$Hugo_Symbol ~ 1, #if the mutation is in a gene from the spliceosome: 1 
+            !CCLE_deleterious$Hugo_Symbol %in% genes_list$Hugo_Symbol ~ 0
+         )) %>% 
+  dplyr::select(Hugo_Symbol, stripped_cell_line_name, primary_disease, mutated) %>% 
+  rename("Gene" = "Hugo_Symbol","Disease" = "primary_disease","Cell line" = "stripped_cell_line_name") %>% 
+  group_by(`Cell line`) %>% 
+  summarise(spliceosome_mutation = sum(mutated)) %>% 
+  mutate(spliceosome_mutation = 
+           case_when(
+             spliceosome_mutation > 0 ~ 1, 
+             spliceosome_mutation == 0 ~ 0 
+           )) -> CCLE_deleterious_splice # list of cell lines with mutations in spliceosome 
+
+CCLE_mutations %>% 
+  select(primary_disease, stripped_cell_line_name) %>%
+  rename("Cell line" = "stripped_cell_line_name")-> list_cancer_cellines
+
+left_join(CCLE_deleterious_splice, list_cancer_cellines) %>% 
+  unique() %>% 
+  rename("Disease" = "primary_disease")-> CCLE_deleterious_splice_disease
+
+
+library(tidyheatmap)
+CCLE_deleterious_splice_disease %>% 
+  as_tibble(CCLE_deleterious_splice_disease) -> CCLE_deleterious_splice_disease
+
+tidyheatmap::tidy_heatmap(df_tidy, 
+                          rows = Gene, 
+                          columns = `Cell line`,
+                          values = `Relative mutation`, 
+                          clustering_method = "binary", 
+                          color_legend_n = 2,
+                          color_legend_min = 0,
+                          color_legend_max = 1,
+                          legend_breaks = c(0,1),
+                          legend_labels = c("no mutated", "mutated"),
+                          colors = c("#ffffff", "#ee4445"),
+                          clustering_distance_cols = "euclidean") 
+
+```
+
+same as above but for cell lines & genes, using cancer info as tile in heatmap (use df_tidy_dam)
+```{r}
+df_tidy_dam %>% 
+  inner_join(list_cancer_cellines, by = "Cell line") %>% 
+  unique() %>% 
+  rename("Cancer" = "primary_disease")-> df_tidy_dam_cancer
+
+tidyheatmap::tidy_heatmap(df_tidy_dam_cancer, 
+                          rows = Gene, 
+                          columns = `Cell line`,
+                          values = `Relative mutation`, 
+                          clustering_method = "binary", 
+                          color_legend_n = 2,
+                          color_legend_min = 0,
+                          color_legend_max = 1,
+                          legend_breaks = c(0,1),
+                          legend_labels = c("no mutated", "mutated"),
+                          colors = c("#ffffff", "#ee4445"),
+                          annotation_col = Cancer) 
+```
 
