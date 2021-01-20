@@ -1,0 +1,159 @@
+---
+title: "Transcripts"
+output: html_notebook
+---
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+```
+
+Load libraries
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(data.table)
+library(gridExtra)
+library(ff)
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+Load data:
+```{r}
+##EXPRESSION AT TRANSCRIPT LEVEL
+#File too big to load using fread (3 GB) 
+transcripts_df <- read_csv("localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+##GENE EXPRESSION
+expression_df = fread("./localdata/depmap/CCLE_expression.csv")
+##RNA SEQ READS
+rnaseq_reads_df = fread("./localdata/depmap/CCLE_RNAseq_reads.csv")
+##MUTATION DATA
+CCLE_mutations = fread("./localdata/depmap/CCLE_info")
+
+##MUTATIONS IN THE SPLICEOSOME
+full_spliceosome_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+
+```
+
+
+## Pre-processing
+Give same variable name to the unique ID of all dataframes
+```{r}
+transcripts_df = 
+  transcripts_df %>% 
+  rename("Tumor_Sample_Barcode" = "X1")
+```
+
+
+Get list of cell lines with mutations in the spliceosome (RUN FIRST SPLICEOSOME_ANALYSIS.RMD)
+```{r}
+## GET CELL LINES NAMES AND SAMPLE ID
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, Tumor_Sample_Barcode) %>% 
+  unique()
+
+##ANNOTATE SPLICEOSOMAL MUTATIONS
+cell_lines_list_mutated =
+    cell_lines_list %>% 
+    mutate(spliceosome_mutated = case_when(
+            cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "YES", 
+            !cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "NO")) 
+
+##CONTINGENCY TABLE
+summary_spliceosome_mutated_cell_lines = 
+  table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated) %>% 
+  as.data.frame() 
+
+##COLUMN NAMES
+colnames(summary_spliceosome_mutated_cell_lines) <- c("Disease", "Mutated", "Freq") 
+```
+
+
+Join annotation to transcript expression data 
+```{r}
+##ONLY TUMOR BARCODE AND ANNOTATION
+ann_spliceosome = 
+  cell_lines_list_mutated %>% 
+  select(Tumor_Sample_Barcode, spliceosome_mutated, primary_disease) %>% 
+  distinct()
+
+##PUT TOGETHER TRANSCRIPT EXPRESSION DATA WITH INFORMATION OF MUTATIONS IN THE SPLICEOSOME AND PRIMARY DISEASE
+ann_transcript = 
+  transcripts_df %>% 
+  left_join(ann_spliceosome, by = "Tumor_Sample_Barcode")
+```
+
+## Analysis
+Let's start by exploring the differences with a PCA 
+Prepare for tsne/PCA
+```{r}
+transcript_pca <- as.matrix(ann_transcript[,1:198755])
+tr_values <- as.matrix(ann_transcript[, 2:198753]) #expression values
+
+#transform na values to 0
+tr_values[is.na(tr_values)] <- 0 
+
+disease <- ann_transcript[, 198755] #disease
+mutated <- ann_transcript[, 198754]
+```
+
+run PCA
+```{r,  fig.height=4, fig.width=7}
+pca1 = prcomp(tr_values, center = TRUE)
+
+plotData = pca1$x[,1:2]
+plotData = cbind(Tumor_Sample_Barcode = transcript_pca[,1], plotData)
+rownames(plotData) = NULL
+
+head(plotData)
+
+ID = plotData[,1]
+
+##GET UNIQUE ID
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(Tumor_Sample_Barcode, spliceosome_mutated, primary_disease) %>% 
+  distinct() 
+
+##DATA TO PLOT 
+plotData_gg = 
+plotData %>% 
+  as_tibble() %>% 
+  left_join(spliceosome_mutated_ID, by ="Tumor_Sample_Barcode") %>%
+  mutate(PC1 = as.double(PC1),
+         PC2 = as.double(PC2)) 
+```
+
+Plot
+```{r,  fig.height=4, fig.width=12}
+
+gg_mutated = 
+  ggplot(plotData_gg, aes(x = PC1,y = PC2, color = spliceosome_mutated)) +
+  geom_point() +
+  facet_wrap(vars(primary_disease), scales = "free") + 
+  stat_ellipse() 
+
+gg_disease =   
+  ggplot(plotData_gg, aes(x = PC1,y = PC2, color = spliceosome_mutated)) +
+  geom_point() +
+  scale_color_manual(values = c("gainsboro", 'forestgreen', 'red2', 'orange',  'cornflowerblue', 
+                'magenta', 'darkolivegreen4',  'indianred1',  'tan4', 'darkblue', 
+                'mediumorchid1', 'firebrick4',  'yellowgreen', 'lightsalmon', 'tan3',
+                "tan1",  'darkgray','wheat4',  '#DDAD4B',  'chartreuse', 
+                 'seagreen1', 'moccasin',   'mediumvioletred', 'seagreen', 'cadetblue1',
+                "darkolivegreen1" ,"tan2" ,  "tomato3" , "#7CE3D8", "black", "darkblue", "violetred"))
+  
+#PLOT BOTH FIGURES TOGETHER
+grid.arrange(gg_disease, gg_mutated, ncol = 2)
+```
+
+

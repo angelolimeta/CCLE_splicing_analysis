@@ -1,0 +1,249 @@
+---
+title: "Linear model for transcription expression data"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(dplyr)
+library(readr)
+library(biomaRt)
+library(data.table)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Load data
+```{r}
+transcripts <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+#METADATA
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+
+```{r}
+#RENAME FIRST VARIABLE 
+transcripts = 
+  transcripts %>% 
+  rename("DepMap_ID" = "X1")
+
+#JOIN TRANSCRIPT INFO WITH METADATA
+long_transcripts_info = 
+  transcripts %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "log_TPM") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+
+head(long_transcripts_info)
+```
+
+
+## Pre-processing: quality check. 
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Fibroblast", "Leukemia", "Lung Cancer", "Ovarian Cancer", "Pancreatic Cancer", "Sarcoma", "Skin Cancer")
+
+df_deseq = 
+long_transcripts_info %>% 
+  filter(primary_disease %in% keep)
+```
+
+Filter out those genes whose median for expression is lower than 1 across all samples
+```{r}
+median_counts =
+  df_deseq %>% 
+  group_by(Gene) %>% 
+  dplyr::mutate(median = median(log_TPM, na.rm=TRUE)) %>% 
+  filter(median > 1)
+```
+
+Create a new column for ensembl gene ID 
+```{r}
+median_counts = 
+  median_counts %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s") 
+   
+median_counts$ensembl_id <- gsub("\\(|\\)","",as.character(median_counts$ensembl_id))
+
+counts_lm = 
+  median_counts %>% 
+  select(Hugo_Symbol, ensembl_id, stripped_cell_line_name, primary_disease, spliceosome_mutated, log_TPM)
+
+##CHECK THAT THERE ARE NO DUPLICATES
+#counts_lm %>% 
+#distinct() %>% 
+#dim()
+```
+
+```{r}
+head(counts_lm)
+```
+
+
+# QQ plot
+```{r}
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "top")
+  )
+
+##PLOT 
+ggplot(median_counts, aes(sample = log_TPM)) + 
+  facet_wrap(facets = "primary_disease") +
+  stat_qq() + 
+  stat_qq_line() 
+```
+
+# Linear model
+
+Fit directly to linear model
+```{r}
+library(broom)
+lm_res =
+  counts_lm %>% 
+  ##NEST BY TRANSCRIPT
+  nest(-ensembl_id) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~lm(log_TPM ~ spliceosome_mutated + primary_disease, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+
+lm_res %>% 
+  filter(term == "spliceosome_mutatedYES") %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(p.value) %>% 
+  head()
+```
+
+Save lm_res
+```{r}
+#saveRDS(lm_res, file = "/Users/castilln/Desktop/thesis/github/results/linear_models/transcripts/lm_res.rds")
+```
+
+# Limma 
+Keep in mind we are using log(TPM+1) values as an input. This normalizes for gene length  and therefore penalizes long genes, which may affect the analysis. However, the normalization should be the same for all samples and  since we are comparing the same cell lines depending on whether they are mutated in the spliceosome or not, we should still be able to extract useful information. 
+
+According to limma, we need to create a design and a DGE list.
+
+Let's prepare the files for the DGE list
+Create count matrix
+```{r}
+
+```
+
+Create meta 
+```{r}
+meta = 
+  df_deseq %>% 
+  ungroup() %>% 
+  select(-c("counts", "Hugo_Symbol", "ensembl_id", "cpm")) %>% 
+  distinct()
+
+#CHANGE PRIMARY DISEASE NAMES SO THAT R CAN UNDERSTAND THEM, NECESSARY FOR DOWNSTREAM ANALYSIS
+meta$primary_disease = gsub(" ", "_", meta$primary_disease)
+meta$primary_disease = gsub("/", "_", meta$primary_disease)
+
+head(meta)
+```
+
+Let's create the gene annotation 
+```{r}
+#SOMETIMES PROBLEMS TO LOAD THIS LIBRARIES BECAUSE INCOMPATIBILITIES W/ COMPLEX HEATMAP: START NEW R SESSION
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+
+gene_annot = AnnotationDbi::mapIds(org.Hs.eg.db, keys=rownames(df_counts),
+       column=c("SYMBOL"), keytype="ENSEMBL") %>% 
+  as.data.frame()
+
+gene_desc = AnnotationDbi::mapIds(org.Hs.eg.db, keys=rownames(df_counts),
+       column=c("GENENAME"), keytype="ENSEMBL") %>% 
+  as.data.frame()
+
+gene_annot = cbind(gene_annot,gene_desc)
+
+colnames(gene_annot) = c("SYMBOL","DESCRIPTION")
+
+head(gene_annot)
+```
+
+Finally, let's create the DGE List 
+```{r}
+dge = DGEList(counts = df_counts,
+              samples = meta,
+              genes = gene_annot)
+
+summary(dge)
+```
+
+We do not normalize because we are using TPM data. 
+
+Set up design matrix
+```{r}
+design = model.matrix(~primary_disease + group, data = dge$samples)
+
+colnames(design)
+#design
+```
+
+
+```{r}
+##GET ONLY LOG(TPM+1) VALUES
+tpms.all = 
+  long_transcripts_info %>% 
+  select(log_TPM)
+
+## remove lowly expressed genes, the threshold I'm using is just an example
+tpms <- tpms.all[rowMeans(tpms.all >= 1), ]
+fit <- lmFit(tpms, design)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2, trend=TRUE)
+```
+

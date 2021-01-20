@@ -1,0 +1,217 @@
+---
+title: "Analysis of splicing mutations in Depmap data"
+output: html_notebook
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(data.table)
+select = dplyr::select
+rename = dplyr::rename
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+
+## Load data 
+```{r}
+exon_usage = fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_ExonUsageRatio_20180929.gct", sep = "\t")
+CCLE = fread("localdata/depmap/CCLE_info")
+expression = fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_expression.csv")
+rna_seq_reads = fread("../../../localdata/depmap/CCLE_RNAseq_reads.csv")
+```
+
+Select only those with RNA seq data
+
+Using RNA-Seq reads from Depmap
+```{r}
+rna_seq_reads = 
+  rna_seq_reads %>% 
+  rename("Tumor_Sample_Barcode" = "V1")
+
+##ALL OBSERVATIONS NOT PRESENT IN RNA_SEQ_READS
+no_rnaseq = 
+  CCLE %>% 
+  anti_join(rna_seq_reads, by = "Tumor_Sample_Barcode")
+
+##ALL OBSERVATIONS PRESENT IN RNA_SEQ_READS
+rnaseq = 
+  CCLE %>% 
+  semi_join(rna_seq_reads, by = "Tumor_Sample_Barcode")
+
+##CREATE UNIQUE ID TO BE ABLE TO COMPARE WITH SPLICE AI OUTPUT
+u_no_rnaseq = no_rnaseq[, id_var := paste(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+
+u_rnaseq = rnaseq[, id_var := paste(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+```
+
+
+```{r}
+## GET LIST OF SAMPLES WITH EXPRESSION DATA
+#expression_list = 
+ # expression %>% 
+ # select(V1) %>% 
+ # rename("Tumor_Sample_Barcode" = "V1")
+
+## IN CCLE, FILTER THOSE CELL LINES WITH RNASEQ DATA (we assume that if it had expression data, it had RNA seq)
+#ccle_rnaseq = 
+ # CCLE %>% 
+ # inner_join(expression_list, by = "Tumor_Sample_Barcode")
+
+## EXCLUDE CELL LINES WITH RNASEQ
+#no_rnaseq = 
+ # CCLE %>% 
+  #return all observations in ccle w/o match in ccle_rnaseq
+#  anti_join(ccle_rnaseq, by = "Tumor_Sample_Barcode")
+```
+
+## Genes suffering the most splice altering mutations
+Let's start with those with RNA-Seq data.
+Count number of mutations annotated as "Splice_Site" per gene and cancer.
+```{r}
+splicing_rna = 
+  rnaseq %>% 
+  filter(Variant_Classification == "Splice_Site") 
+
+
+top_splicing_rna = 
+  rnaseq %>% 
+  filter(Variant_Classification == "Splice_Site") %>% 
+  group_by(Hugo_Symbol) %>% 
+  tally() %>% 
+  rename("mutations" = "n") %>% 
+  arrange(desc(mutations)) %>% 
+  top_n(30)
+```
+Plot
+```{r, fig.width=2, fig.height=2}
+ggplot(data = top_splicing_rna, aes(x = reorder(Hugo_Symbol, mutations), y = mutations)) +
+  geom_col(fill = "black") +
+  coord_flip() +
+  theme_bw()+ 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) +
+  ylab("Top genes with splicing")
+```
+
+Same for samples lacking RNA-Seq data.
+Count number of mutations annotated as "Splice_Site" per gene and cancer.
+```{r}
+splicing_no_rna = 
+  no_rnaseq %>% 
+  filter(Variant_Classification == "Splice_Site") 
+
+top_splicing_no_rna = 
+  no_rnaseq %>% 
+  filter(Variant_Classification == "Splice_Site") %>% 
+  group_by(Hugo_Symbol) %>% 
+  tally() %>% 
+  rename("mutations" = "n") %>% 
+  arrange(desc(mutations)) %>% 
+  top_n(30)
+```
+Plot
+```{r, fig.width=2, fig.height=2}
+ggplot(data = top_splicing_no_rna, aes(x = reorder(Hugo_Symbol, mutations), y = mutations)) +
+  geom_col(fill = "black") +
+  coord_flip() +
+  theme_bw()+ 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) +
+  ylab("Top genes with splicing mutations")
+```
+
+## List of genes only present in the sampels w/o RNA-Seq data 
+
+```{r}
+genes_no_rna = 
+  splicing_no_rna %>% 
+  anti_join(splicing_rna, by = "Hugo_Symbol") %>% 
+  filter(Variant_Classification == "Splice_Site") %>% 
+  group_by(Hugo_Symbol) %>% 
+  tally() %>% 
+  rename("mutations" = "n") %>% 
+  arrange(desc(mutations)) 
+
+```
+
+
+Splicing distribution across cancer in both df
+
+First, we need to know the number of cell lines studied for each disease so that we can normalize 
+```{r}
+cell_lines = 
+  CCLE %>% 
+  group_by(primary_disease) %>% 
+  count(CCLE_Name) %>% 
+  count(primary_disease) %>% 
+  rename("nr_cell_lines" = "n")
+```
+
+For samples with RNA-Seq data
+```{r}
+splicing_rna %>%
+  group_by(primary_disease) %>% 
+  tally() %>% 
+  rename("mutations"="n") %>% 
+  #normalize by nr of cell lines
+  left_join(cell_lines, by = "primary_disease") %>% 
+  mutate(mutations = mutations/nr_cell_lines) %>% 
+  ggplot(aes(x = reorder(primary_disease, mutations), y = mutations)) + 
+  geom_col(fill="black") +
+  coord_flip() + 
+  theme_bw()+ 
+  theme(axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) +
+  ylab("Splicing mutations")
+
+```
+
+
+```{r}
+splicing_no_rna %>%
+  group_by(primary_disease) %>% 
+  tally() %>% 
+  rename("mutations"="n") %>% 
+  #normalize by nr of cell lines
+  left_join(cell_lines, by = "primary_disease") %>% 
+  mutate(mutations = mutations/nr_cell_lines) %>% 
+  ggplot(aes(x = reorder(primary_disease, mutations), y = mutations)) + 
+  geom_col(fill="black") +
+  coord_flip() + theme_bw()+ 
+  theme(axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) +
+  ylab("Splicing mutations")
+```
+
+

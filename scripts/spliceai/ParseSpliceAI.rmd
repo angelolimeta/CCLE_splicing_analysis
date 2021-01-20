@@ -1,0 +1,171 @@
+---
+title: "Parse SpliceAI"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(readr)
+library(data.table)
+
+select = dplyr::select
+mutate = dplyr::mutate
+rename = dplyr::rename
+filter = dplyr::filter
+setdiff = dplyr::setdiff
+slice = dplyr::slice
+```
+
+## Load data
+
+Read data and merge results for each chromosome in a single file
+```{r, message=FALSE}
+data_files <- list.files("/Users/castilln/Desktop/thesis/localdata/spliceai/output_q4/")
+
+#read all .vcf files
+splice_output_list = list()
+
+#obs that chr X has been transformed to chr22 and chr Y has been transformed to chr23
+for (i in 1:23) {
+  splice_output_list[[i]] <- assign(paste0("splice_chr", i),
+      fread(paste0("/Users/castilln/Desktop/thesis/localdata/spliceai/output_q4/", data_files[i]), header = TRUE, sep = "\t"))
+}
+
+#bind all outputs together
+rbindlist(splice_output_list) -> full_splice_out
+full_splice_out %>% 
+  rename("CHROM" = "#CHROM") -> full_splice_out
+
+#order chromosomes
+ordered_splice <- full_splice_out[order(full_splice_out[,1]),]
+
+```
+
+## Begin parsing
+
+Separate info into columns
+```{r}
+df_splice =
+  ordered_splice %>%
+  separate(
+    col = INFO,
+    sep = "\\|",
+    into = c(
+      "INFO",
+      "SYMBOL",
+      "SCORE_ACC_GAIN",
+      "SCORE_ACC_LOSS",
+      "SCORE_DONOR_GAIN",
+      "SCORE_DONOR_LOSS",
+      "POS_ACC_GAIN",
+      "POS_ACC_LOSS",
+      "POS_DONOR_GAIN",
+      "POS_DONOR_LOSS",
+      "EXTRA"
+      ),
+    extra = "merge",
+    fill = "right"
+  )
+
+head(df_splice)
+```
+
+Move over all additional splice events into a separate column called ADDITIONAL_EVENTS
+```{r}
+df_splice =
+  df_splice %>% 
+  mutate(ADDITIONAL_EVENTS = POS_DONOR_LOSS) %>% 
+  mutate(POS_DONOR_LOSS = str_extract(ADDITIONAL_EVENTS,"[^,]*")) %>%
+  mutate(ADDITIONAL_EVENTS = str_extract(ADDITIONAL_EVENTS,",.*$")) %>% 
+  mutate(ADDITIONAL_EVENTS = substr(ADDITIONAL_EVENTS,2,nchar(ADDITIONAL_EVENTS))) %>% 
+  mutate(ADDITIONAL_EVENTS = paste(ADDITIONAL_EVENTS,EXTRA,sep = "|")) %>%
+  mutate(ADDITIONAL_EVENTS = gsub("NA\\|NA",NA,ADDITIONAL_EVENTS)) %>% 
+  select(-EXTRA)
+
+head(df_splice)
+```
+Let's store additional splice events as a new tibble
+```{r}
+df_additional = 
+  str_split(df_splice$ADDITIONAL_EVENTS,pattern = ",",simplify = TRUE) %>% 
+  as.data.frame() %>% 
+  mutate_all(na_if,"")
+
+```
+
+We can now calculate the number of additional splice events and store in our original data
+```{r}
+no_events = apply(!is.na(df_additional), 1, sum)
+
+df_splice =
+  df_splice %>% 
+  mutate(NO_ADD_EVENTS = no_events)
+```
+
+Let's store additional splice events as a new tibble
+```{r}
+df_additional = 
+  str_split(df_splice$ADDITIONAL_EVENTS,pattern = ",",simplify = TRUE) %>% 
+  as.data.frame() %>% 
+  mutate_all(na_if,"") %>% 
+  filter(!is.na(V1))
+```
+
+Let's subset the data by SNPs with multiple events
+```{r}
+df_splice_add =
+  df_splice %>% 
+  filter(NO_ADD_EVENTS != 0)
+```
+
+
+Let's create a tibble with the total number of additional events to be added
+```{r}
+tot_no_events = sum(no_events)
+
+df_add_events = 
+  data.frame(matrix(nrow = tot_no_events, ncol = 17))
+
+colnames(df_add_events) = colnames(df_splice)[1:17]
+```
+
+Now we can finally loop and add the events to our matrix
+```{r}
+event_index = 1
+for (SNP_index in 1:nrow(df_splice_add)) {
+  events_in_SNP = df_splice_add$NO_ADD_EVENTS[SNP_index]
+  for (event_index_SNP in 1:events_in_SNP) {
+    # Add baseline info for each variant
+    df_add_events[event_index,1:7] = df_splice_add[SNP_index,1:7]
+
+    # Extract splice info for each gene variant
+    splice_info_str = df_additional[SNP_index,event_index_SNP]
+    splice_info_vec = str_split(splice_info_str,pattern = "\\|",simplify = TRUE)
+    
+    # Add gene specific splice info for each variant
+    df_add_events[event_index,8:17] = splice_info_vec
+    
+    event_index = event_index + 1
+  }
+}
+```
+
+Create result matrix
+```{r}
+spliceai_out = df_splice %>% 
+  as.data.frame()
+
+spliceai_out = spliceai_out[,1:17]
+
+spliceai_out = rbind(spliceai_out,df_add_events)
+
+spliceai_out = 
+  spliceai_out %>% 
+  arrange(desc(POS))
+
+
+write.csv(spliceai_out, "~/Desktop/thesis/localdata/spliceai/output/spliceAI_out.csv", quote = FALSE, row.names = FALSE)
+```

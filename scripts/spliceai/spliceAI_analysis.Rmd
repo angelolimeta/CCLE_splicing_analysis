@@ -1,0 +1,381 @@
+---
+title: "SpliceAI analysis"
+output:
+  html_document:
+    df_print: paged
+---
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(data.table)
+library(pROC)
+library(PRROC)
+library(hrbrthemes)
+library(viridis)
+library(MLeval)
+select = dplyr::select
+rename = dplyr::rename
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+
+## Load parsed output
+
+```{r}
+##SPLICEAI PARSED OUTPUT
+data = fread("localdata/spliceai/output/spliceAI_out.csv")
+##CCLE MUTATIONS DATA
+CCLE = fread("localdata/depmap/CCLE_info")
+#CCLE RNASEQ DATA
+rna_seq_reads = fread("localdata/depmap/CCLE_RNAseq_reads.csv")
+
+```
+
+## Create unique ID for each SNP 
+```{r}
+##UNIQUE VARIABLE FOR SPLICEAI OUT
+udata = data[, id_var := paste(ID, SYMBOL, POS, REF, ALT, sep = "_"), by = .(ID, SYMBOL, POS, REF, ALT)]
+
+##UNIQUE VARIABLE FOR CCLE DATA
+uccle = CCLE[, id_var := paste(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+```
+
+
+## Threshold
+Find max probability 
+
+```{r, warning=FALSE}
+###CREATE A NEW COLUMN WITH THE HIGHEST PROBABILITY
+
+##TURN SCORE COLUMNS INTO NUMERIC VARIABLES
+#SELECT SCORE COLUMNS
+score_col = 
+  udata %>% 
+  select(contains("SCORE")) 
+
+#SELECT COLUMN NAMES
+cols.num <- colnames(score_col)
+
+#CONVERT INTO NUMERIC
+udata = as.data.frame(udata)
+udata[cols.num] <- sapply(udata[cols.num],as.numeric)
+
+##SELECT MAX PROBABILITY FROM SPLICEAI OUTPUT
+max_data =
+  udata %>% 
+  mutate(MAX_PROBABILITY = apply(X = data[,10:13], MARGIN = 1, FUN = max)) %>% 
+  drop_na(MAX_PROBABILITY)
+
+```
+
+
+## Annotation
+Let's see which mutations had already been annotated as splice variants in the CCLE
+```{r}
+## GET LIST OF ALL VARIANT ANNOTATIONS
+CCLE %>% 
+  pull(Variant_Classification) %>% 
+  unique()
+
+## GET ANNOTATION COLUMNS
+ann_ccle = 
+uccle %>%  
+  select(Hugo_Symbol, CCLE_Name, Variant_Classification, Variant_annotation, id_var, primary_disease)
+
+## FILTER FOR THOSE CLASSIFIED AS ALTERING A SPLICE SITE
+CCLE_splice = 
+  CCLE %>% 
+    filter(Variant_Classification == "Splice_Site")
+```
+
+Join CCLE annotation with spliceAI output
+```{r}
+## JOIN BY HUGO SYMBOL AND CELL LINE NAME
+ann_data = 
+  max_data %>% 
+  left_join(ann_ccle, by = "id_var") %>% 
+  select(-c("Hugo_Symbol", "QUAL", "FILTER", "CCLE_Name")) #drop unnecessary variables
+```
+
+## PREPARE DATA FOR ROC CURVES
+
+```{r}
+## GIVE SPLICE SITE 1 AND EVERYTHING ELSE 0 
+roc_data = 
+  ann_data %>% 
+  mutate(splice_altering = case_when(
+    Variant_Classification == "Splice_Site" ~ 1, 
+    Variant_Classification != "Splice_Site" ~ 0
+  )) %>% 
+  mutate(MAX_PROBABILITY = as.numeric(MAX_PROBABILITY)) %>% 
+  drop_na()
+
+head(roc_data)
+```
+
+Use Variant_annotation variable instead of Variant_Classification (less levels)
+```{r}
+## CONVERT ANNOTATION INTO FACTOR AND PROBABILTY TO DOUBLE 
+alt_ann = 
+  ann_data %>% 
+  mutate(MAX_PROBABILITY = as.double(MAX_PROBABILITY)) %>% 
+  drop_na() %>% 
+  mutate(Variant_annotation = as_factor(Variant_annotation)) 
+
+#SEE ANNOTATION
+alt_ann %>% 
+  select(Variant_annotation) %>% 
+  distinct()
+
+## DATA FOR ROC
+roc_alt_data = 
+  alt_ann %>% 
+  mutate(Variants = case_when(
+    Variant_annotation == "silent" ~ 0,
+    Variant_annotation == "other conserving" ~ 1, 
+    Variant_annotation == "other non-conserving" ~ 0, 
+    Variant_annotation == "damaging" ~ 1
+  ))
+```
+
+## ROC curve
+
+
+AUC: Area Under the Curve
+```{r}
+## PREDICTOR = spliceAI out
+## RESPONSE = Variant_Classification
+
+rocobj <- roc(response = roc_data$splice_altering, predictor = roc_data$MAX_PROBABILITY, partial.auc.correct = TRUE, percent = TRUE)
+
+## PLOT 
+plot.roc(rocobj, print.auc = TRUE)
+```
+
+## PRECISION RECALL CURVE
+
+```{r}
+pr <- pr.curve(roc_data$MAX_PROBABILITY,roc_data$splice_altering, curve = T, max.compute = TRUE, 
+  min.compute = TRUE, rand.compute = TRUE)
+plot(pr, max.plot = TRUE, min.plot = TRUE, rand.plot = TRUE, fill.area = TRUE)
+```
+
+## Violin plots
+Function to produce data statistics
+```{r}
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+```
+
+
+Data distribution
+```{r, fig.width=3, fig.height=2}
+##BOXPLOTS  
+roc_data = 
+  roc_data %>% 
+    mutate(splice_altering = as.factor(splice_altering)) 
+
+
+ggplot(data = roc_data, aes(x = splice_altering, y = MAX_PROBABILITY)) +
+  geom_violin(trim = F) + 
+  scale_y_log10() +
+  theme_bw() +
+  theme( 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  scale_x_discrete(labels=c("0" = "NO", "1" = "YES")) +
+  ylab("Predicted probability of being a splice altering mutation") + 
+  xlab("Splice altering") +
+  stat_summary(fun.data = data_summary)
+
+
+```
+
+
+## Analyze prediction for each disease
+
+```{r, fig.width=7, fig.height=6}
+## EXCLUDE DATA FROM UNKNOWN OR NOT-CANCEROUS CELL LINES AND FROM ADRENAL CANCER (1 CELL LINE)
+data_all_cancers = 
+  select(filter(roc_data, primary_disease != "Unknown" & primary_disease != "Non-Cancerous" & primary_disease != "Adrenal Cancer"), c("primary_disease", "MAX_PROBABILITY", "splice_altering"))
+
+#make sure splice_altering is listed as factor
+ggplot(data = data_all_cancers, aes(x = splice_altering, y = MAX_PROBABILITY, fill = splice_altering)) +
+  geom_violin(trim = F) + 
+  scale_y_log10() +
+  facet_wrap(facets = "primary_disease") +
+  #facet_grid(. ~ primary_disease) +
+  scale_fill_viridis(discrete=T, name="Annotated as splice-altered variants based on RNA-Seq data", labels = c("NO", "YES")) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  scale_x_discrete(labels=c("0" = "NO", "1" = "YES")) +
+  ylab("Predicted log probability of being a splice altering mutation") + 
+  xlab("") +
+  stat_summary(fun.data = data_summary)
+
+
+ggsave("spliceai_viz_probabilities.png", width = 10, height = 10)
+```
+
+## Repeat analysis excluding exons
+Find mutations that do not occur in exons
+```{r}
+#cDNA change column: changes in coding DNA
+non_coding = 
+  CCLE %>% 
+  filter(is.na(cDNA_Change))
+
+## ADD UNIQUE ID  
+id_non_coding = non_coding[, id_var := paste(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+
+## GET ANNOTATION COLUMN
+ann_non_coding = 
+id_non_coding %>%  
+  select(Hugo_Symbol, CCLE_Name, Variant_Classification, Variant_annotation, id_var, primary_disease)
+```
+
+Join CCLE annotation with spliceAI output
+```{r}
+## JOIN BY HUGO SYMBOL AND CELL LINE NAME
+ann_non_coding = 
+  max_data %>% 
+  left_join(ann_ccle, by = "id_var") %>% 
+  select(-c("Hugo_Symbol", "QUAL", "FILTER", "CCLE_Name")) #drop unnecessary variables
+```
+
+## PREPARE DATA FOR ROC CURVES
+
+```{r}
+## GIVE SPLICE SITE 1 AND EVERYTHING ELSE 0 
+roc_non_coding = 
+  ann_non_coding %>% 
+  mutate(splice_altering = case_when(
+    Variant_Classification == "Splice_Site" ~ 1, 
+    Variant_Classification != "Splice_Site" ~ 0
+  )) %>% 
+  mutate(MAX_PROBABILITY = as.numeric(MAX_PROBABILITY)) %>% 
+  drop_na()
+
+head(roc_non_coding)
+```
+
+## ROC curve
+
+AUC: Area Under the Curve
+```{r}
+## PREDICTOR = spliceAI out
+## RESPONSE = Variant_Classification
+
+rocobj_nc <- roc(response = roc_non_coding$splice_altering, predictor = roc_non_coding$MAX_PROBABILITY, partial.auc.correct = TRUE, percent = TRUE)
+
+## PLOT 
+plot.roc(rocobj_nc, print.auc = TRUE)
+#CHECK GGROC 
+```
+
+## PRECISION RECALL CURVE
+
+```{r}
+pr_nc <- pr.curve(roc_non_coding$MAX_PROBABILITY,roc_non_coding$splice_altering, curve = T, max.compute = TRUE, 
+  min.compute = TRUE, rand.compute = TRUE)
+plot(pr_nc, max.plot = TRUE, min.plot = TRUE, rand.plot = TRUE, fill.area = TRUE)
+```
+
+We get the same results than without masking the exons. 
+
+## Check spliceAI output for data with and w/o RNA-seq
+Get unique ID for those observation w/o RNA-seq
+```{r}
+rna_seq_reads = 
+  rna_seq_reads %>% 
+  rename("Tumor_Sample_Barcode" = "V1")
+
+no_rnaseq = 
+  CCLE %>% 
+  anti_join(rna_seq_reads, by = "Tumor_Sample_Barcode")
+
+##CREATE UNIQUE ID TO BE ABLE TO COMPARE WITH SPLICE AI OUTPUT
+u_no_rnaseq = no_rnaseq[, id_var := paste(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(CCLE_Name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+```
+
+Generate new variable with YES/NO info for RNAseq data 
+```{r}
+data_no_rnaseq = 
+  roc_data %>% 
+  semi_join(u_no_rnaseq, by = "id_var") %>% 
+  mutate(rnaseq = "NO")
+
+data_rnaseq = 
+  roc_data %>% 
+  anti_join(u_no_rnaseq, by = "id_var") %>% 
+  mutate(rnaseq = "YES")
+
+##BIND BOTH DATA FRAMES
+data_rnaseq = 
+  rbind(data_no_rnaseq, data_rnaseq)
+
+##AS FACTOR
+data_rnaseq = 
+  data_rnaseq %>% 
+  mutate(rnaseq = as.factor(rnaseq))
+```
+
+PLOT
+```{r, fig.width=7, fig.height=6}
+##COUNT NUMBER OF SAMPLES CLASSIFIED AS SPLICE_ALTERING 
+data_violin = 
+  data_rnaseq %>% 
+  group_by(primary_disease) %>% 
+  count(splice_altering) %>% 
+  dplyr::rename("count_splice_altering" = "n") %>% 
+  select(-c("splice_altering"))
+
+##JOIN COUNT DATA FROM PREVIOUS STEP
+data_rnaseq = 
+  data_rnaseq %>% 
+  left_join(data_violin, by = "primary_disease")
+
+##VIOLIN PLOT 
+ggplot(data = data_rnaseq, aes(x = rnaseq, y = MAX_PROBABILITY, fill = splice_altering)) +
+  geom_violin(trim = F) + 
+  #LOG TRANSFORM PROBABILITIES TO OBTAIN BETTER DENSITY FOR VISUALIZATION (CHANGED Y AXIS LABEL ACCORDINGLY)
+  scale_y_log10() + 
+  facet_wrap(facets = "primary_disease") +
+  scale_fill_viridis(discrete=T, name="Annotated as splice-altered variants based on RNA-Seq data", labels = c("NO", "YES")) +
+  theme_bw() +
+  theme( 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        axis.text.x = element_blank()
+        ) +
+  ylab("Predicted log probability of being a splice altering mutation") + 
+  xlab("") +
+  stat_summary(fun.data = data_summary)
+
+ggsave("spliceai_viz_probabilities.png", width = 10, height = 10)
+```
+ 

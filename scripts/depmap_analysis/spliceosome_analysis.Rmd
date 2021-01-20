@@ -1,0 +1,528 @@
+---
+title: "Spliceosome mutations"
+author: "Leticia Castillon"
+Rstudio version: "1.3.1093"
+date: "27-10-20"
+output: html_notebook
+---
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(biomaRt)
+library(car)
+library(cowplot)
+library(ggpubr)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(hrbrthemes)
+library(wesanderson)
+library(data.table)
+library(biomaRt)
+library(KEGGREST)
+library(plyr)
+library(UpSetR)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(tidyHeatmap)
+select = dplyr::select
+rename = dplyr::rename
+count = dplyr::count
+```
+Renviron
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+```
+
+
+## Load data
+
+Read data: list of mutations from CCLE and list of genes that are part of the spliceosome machinery
+```{r,  message=FALSE}
+##SNPs
+CCLE_mutations = fread("localdata/depmap/mutations_info", header = TRUE) #mutations and sample info 
+
+##FROM HGCN, MAJOR SPLICEOSOME GENES
+splicing_major_genes_list = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-major-spliceosome.csv", header = TRUE) 
+splicing_major_genes_list = 
+splicing_major_genes_list %>% 
+ rename("Hugo_Symbol" = "Approved symbol") 
+
+##FROM HGCN, MINOR SPLICEOSOME GENES
+splicing_minor_genes_list = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-minor-spliceosome.csv", header = TRUE) 
+splicing_minor_genes_list = 
+splicing_minor_genes_list %>% 
+   rename("Hugo_Symbol" = "Approved symbol") 
+
+##MAKE LIST WITH ALL GENES ASSOCIATED WITH THE SPLICEOSOME
+splicing_gene_list = full_join(splicing_major_genes_list, splicing_minor_genes_list) %>% 
+  select(Hugo_Symbol)
+
+##LOAD SPLICEOSOME ASSOCIATED GENES FROM HUMAN PROTEIN ATLAS
+spliceosome_hp = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/spliceosome.tsv", sep = "\t", header = TRUE) 
+
+#SELECT VARIABLES OF INTEREST
+spliceosome_hp = 
+  spliceosome_hp %>% 
+  select(Gene) %>% 
+  rename("Hugo_Symbol" = "Gene")
+```
+
+Gene length for normalization
+```{r}
+gene_length = fread("localdata/gene_length.csv", select = c("Hugo_Symbol", "Transcript", "Length"))
+```
+
+
+## Prepare data frame with mutations affecting the splicing machinery / process
+Query KEGG and obtain hugo symbols for the genes belonging to spliceosome pathway
+```{r}
+##GET SPLICEOSOMAL PATHWAT FROM KEGG
+query = keggGet(c("hsa03040")) 
+
+##OBTAIN GENE LIST BELONGING TO PATHWAY
+res = keggLink("hsa", "path:hsa03040")
+res = as.list(res)
+
+##EMPTY VECTOR WITH SAME LENGTH AS NR OF GENES IN PATHWAY 
+ncbi_id = vector(mode = "character", length = length(res)) 
+
+## CREATE LIST WITH GENE NAMES
+for (i in 1:length(res)){
+  #access each gene individually
+  gene = res[i] 
+  #get NCBI ID for each gene
+  ncbi_id[i] = keggConv("ncbi-geneid", gene) 
+}
+
+##ONLY ID
+ncbi_id = as.vector(str_remove(ncbi_id, "ncbi-geneid:")) 
+
+## LIST OF HUGO SYMBOLS FOR GENES RELATED TO SPLICEOSOME ACCORDING TO KEGG
+genes_list = getBM(filters= "entrezgene_id", attributes= c("entrezgene_id",
+"hgnc_symbol", "description"), values = ncbi_id, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))) 
+```
+
+```{r, include=FALSE}
+## SAVE LIST AS .CSV
+#write_csv(genes_list, "../../../localdata/depmap/gene_list_from_kegg.csv")
+
+#genes_list = fread("../../../localdata/depmap/gene_list_from_kegg.csv")
+```
+
+## Identify spliceosome mutated genes in CCLE
+
+Filter CCLE using the generated gene list. 
+```{r}
+##RENAME ID TO HUGO SYMBOL
+genes_list = 
+  genes_list %>% 
+  rename("Hugo_Symbol" = "hgnc_symbol") %>% 
+  select(Hugo_Symbol)
+
+##BIND GENE LIST FROM THE DIFFERENT SOURCES
+spliceosome_genes = 
+  rbind(spliceosome_hp, splicing_gene_list, genes_list) %>% 
+  unique()
+
+## FILTER MUTATIONS THAT AFFECT THE SPLICEOSOME
+spliceosome_mutations_ccle = 
+   #include genes present in CCLE and in KEGG pathway: only genes related to the spliceosome
+  inner_join(CCLE_mutations, spliceosome_genes, by = "Hugo_Symbol") %>%
+  #select variables of interest
+  dplyr::select(Hugo_Symbol, Variant_Classification, Variant_Type, stripped_cell_line_name, primary_or_metastasis, 
+                primary_disease, Subtype, Variant_annotation, DepMap_ID, Annotation_Transcript) %>% 
+  filter(Variant_Classification != "Silent" | Variant_Type != "SNP")  
+
+```
+
+
+Save as .csv
+```{r}
+write_csv(spliceosome_mutations_ccle, "localdata/depmap/mutations_spliceosome.csv")
+```
+
+
+## Normalization
+
+Get nr of cell lines studied per disease
+```{r}
+## DF WITH NUMBER OF STUDIED CELL LINES PER CANCER
+normalize_cell_lines = 
+  CCLE_mutations %>% 
+  group_by(primary_disease) %>% 
+  dplyr::distinct(stripped_cell_line_name) %>% 
+  #count n of distinct cell lines for each cancer #sometimes problems with masking of function
+  dplyr::count(primary_disease) %>% 
+  rename("cell_lines_number" = "n") 
+```
+
+Average number of mutations per cancer
+```{r}
+normalized_mutations_cancer =   
+spliceosome_mutations_ccle %>% 
+  group_by(primary_disease) %>% 
+  #count observations per cancer  
+  tally() %>% 
+  rename("MUTATIONS_PER_CANCER" = "n") %>% 
+  left_join(normalize_cell_lines, by = "primary_disease") %>% 
+  #normalize for the number of cell lines studied
+  mutate(NORMALIZED_MUTATIONS = MUTATIONS_PER_CANCER / cell_lines_number) %>% 
+  rename("DISEASE" = "primary_disease")
+```
+
+Plot
+```{r, fig.height=2.5, fig.width=3}
+  ggplot(data=normalized_mutations_cancer, aes(x = reorder(DISEASE, NORMALIZED_MUTATIONS), y = NORMALIZED_MUTATIONS)) +
+  geom_bar(stat = "identity", fill = "black") +
+  geom_text(aes(label = sprintf("%0.2f", round(NORMALIZED_MUTATIONS, digits =2))), size = 2, position = "dodge", hjust=-0.1) +
+  xlab(NULL) + 
+  ylab("Average number of mutations per cell line") + 
+  ggtitle("Number of mutations in the splicing machinery") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip() 
+```
+
+Normalize mutations per transcript length
+```{r}
+normalized_mutations_gene =
+  spliceosome_mutations_ccle %>%
+  group_by(Hugo_Symbol, Annotation_Transcript) %>% 
+  tally() %>% 
+  rename("MUTATIONS" = "n") 
+
+normalized_mutations_gene$Annotation_Transcript =   
+  gsub("\\..*", "", normalized_mutations_gene$Annotation_Transcript)
+
+gene_length = 
+  gene_length %>% 
+  select(-Hugo_Symbol)
+
+normalized_mutations_gene = 
+  normalized_mutations_gene %>%   
+  rename("Transcript" = "Annotation_Transcript") %>% 
+  left_join(gene_length, by = "Transcript") %>% 
+  #normalize by gene length
+  mutate(NORMALIZED_MUTATIONS = MUTATIONS / Length) %>% 
+  arrange(desc(NORMALIZED_MUTATIONS)) %>% 
+  ungroup()
+
+normalized_mutations_gene %>% 
+  top_n(20)
+```
+
+
+
+
+Most mutated spliceosomal genes per cancer 
+```{r}
+top_mutations_cancer = 
+spliceosome_mutations_ccle %>% 
+  select(Hugo_Symbol, primary_disease, Annotation_Transcript, stripped_cell_line_name) %>% 
+  rename("Transcript" = "Annotation_Transcript") %>% 
+  group_by(Hugo_Symbol, Transcript) %>%
+  count(primary_disease) %>% 
+  rename("MUTATIONS" = "n") %>% 
+  ungroup() %>% 
+  group_by(primary_disease) %>% 
+  arrange(desc(MUTATIONS)) %>% 
+  top_n(3)
+
+
+##FOR VISUALIZATION: NORMALIZE PER TRANSCRIPT LENGTH 
+#THERE IS NO LENGTH INFORMATION FOR ALL GENES
+norm_top_mutations_cancer = 
+  top_mutations_cancer %>% 
+  left_join(gene_length, by ="Transcript") %>% 
+  mutate(NORM_MUTATIONS = MUTATIONS/Length)
+```
+
+```{r, fig.height=20, fig.width=4}
+colorCount = length(unique(top_mutations_cancer$Hugo_Symbol))
+getPalette = colorRampPalette(brewer.pal(9, "Paired"))
+
+ggplot(top_mutations_cancer, aes(x = Hugo_Symbol, y = MUTATIONS, group_by(primary_disease))) +
+  geom_col() +
+  facet_wrap("primary_disease") +
+  scale_fill_manual(values = getPalette(colorCount)) +
+  geom_text_repel(aes(x = primary_disease, y = MUTATIONS, label = Hugo_Symbol), size = 1, 
+                  segment.color = '#cccccc',     segment.size = 0.2,
+colour = "black", point.padding = NA, position = position_identity()) + 
+  coord_flip() +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank()) +
+   theme(legend.position="bottom") +
+  guides(fill=guide_legend(nrow=6))+
+  xlab(NULL) +
+  ylab("Most mutated genes across cancer types")
+```
+
+
+Heatmap
+```{r}
+##PREPARE FOR HEATMAP
+#PIVOT WIDER
+df = 
+  top_mutations_cancer %>%
+  select(Hugo_Symbol,primary_disease, MUTATIONS) %>% 
+  pivot_wider(id_cols = NULL, names_from = primary_disease, values_from = MUTATIONS)%>% 
+  filter(!is.na(Hugo_Symbol))  #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df[is.na(df)] <- 0 #convert na values in 0
+
+df %>%
+  select(-c(Engineered, Unknown)) %>% 
+  rename("Gene"="Hugo_Symbol") -> df #remove Engineered and Unknown classes
+
+df[ , colSums(is.na(df)) == 0] -> df #drop columns containing na values
+
+df %>% 
+  pivot_longer(cols = !Gene,  names_to = "DISEASE", values_to = "Relative mutation") %>% 
+  left_join(normalized_mutations_cancer, by = "DISEASE") -> df_hm_tidy
+
+#tidy heatmap
+#heatmap of number of mutations for each gene across cancer: only non-silent and non-SNP mutations
+df_hm_tidy %>%
+  heatmap(Gene, DISEASE, `Relative mutation`,
+          palette_value = circlize::colorRamp2(c(0, 2, 5), viridis::magma(3))) %>% 
+  add_bar(NORMALIZED_MUTATIONS) %>% 
+  add_bar(cell_lines_number) -> htm
+##transform relative mutations in percentage
+htm
+```
+analysis for individual cell lines
+```{r}
+cell_line_spliceosome_mutations_ccle <-spliceosome_mutations_ccle %>%
+  group_by(stripped_cell_line_name) %>% #group by cell line
+  dplyr::count(Hugo_Symbol) %>% #count nr of mutations for each gene/cell_line
+  rename("observed_mutations" = "n")  
+```
+
+Prepare for heatmap
+pivot wider
+```{r}
+df_cell_lines <- cell_line_spliceosome_mutations_ccle %>% 
+  ungroup() %>% 
+  pivot_wider(id_cols = Hugo_Symbol, names_from = stripped_cell_line_name, values_from = observed_mutations)%>% 
+  filter(!is.na(Hugo_Symbol))  #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df_cell_lines[is.na(df_cell_lines)] <- 0 #convert na values in 0
+
+```
+
+tidy heatmap
+```{r}
+#heatmap with amount of mutations for each spliceosomal gene across cell lines
+df_cell_lines %>%
+  rename("Gene" = "Hugo_Symbol") -> df_cell_lines #remove Engineered and Unknown classes
+
+df_cell_lines[ , colSums(is.na(df_cell_lines)) == 0] -> df_cell_lines #drop columns containing na values
+  
+df_cell_lines %>% 
+  pivot_longer(cols = !Gene,  names_to = "Cell line", values_to = "Relative mutation") -> df_tidy
+
+#heatmap
+library(tidyHeatmap)
+df_tidy %>%
+  heatmap(Gene, `Cell line`, `Relative mutation`,
+           palette_value = circlize::colorRamp2(c(0, 5, 10, 15, 20), viridis::magma(5))) -> htm_cell_lines
+
+htm_cell_lines
+
+```
+
+repeat heatmap only for damaging mutations (according to variant_annotation variable)
+```{r}
+spliceosome_mutations_ccle_cell_line_dam =
+  spliceosome_mutations_ccle %>%
+  filter(Variant_annotation == "damaging") %>% 
+  group_by(stripped_cell_line_name) %>% #group by cell line
+  dplyr::count(Hugo_Symbol) %>% #count nr of mutations for each gene/cell_line
+  rename("observed_mutations" = "n")   
+
+df_cell_lines_dam = 
+  spliceosome_mutations_ccle_cell_line_dam %>% 
+  ungroup() %>% 
+  pivot_wider(id_cols = Hugo_Symbol, names_from = stripped_cell_line_name, values_from = observed_mutations)%>% 
+  filter(!is.na(Hugo_Symbol))   #pivot wider to get a df with mutations, disease and relative mutation rate
+
+
+df_cell_lines_dam[is.na(df_cell_lines_dam)] <- 0 #convert na values in 0
+
+#heatmap with amount of mutations for each spliceosomal gene across cell lines
+df_cell_lines_dam = 
+  df_cell_lines_dam %>%
+  rename("Gene" ="Hugo_Symbol")  
+
+df_cell_lines_dam[ , colSums(is.na(df_cell_lines_dam)) == 0] -> df_cell_lines_dam #drop columns containing na values
+
+df_tidy_dam = 
+  df_cell_lines_dam %>% 
+  pivot_longer(cols = !Gene,  names_to = "Cell line", values_to = "Relative mutation") 
+
+#heatmap
+htm_cell_lines_dam = 
+  df_tidy_dam %>%
+  heatmap(Gene, `Cell line`, `Relative mutation`,
+          palette_value = circlize::colorRamp2(c(0, 5, 10, 15, 20), viridis::magma(5))) 
+
+htm_cell_lines_dam
+
+```
+
+Heatmap for binary data
+```{r}
+#list of cancer cell lines
+list_cancer_cellines = 
+  CCLE_mutations %>% 
+  select(primary_disease, stripped_cell_line_name) %>%
+  rename("Cell line" = "stripped_cell_line_name") %>% 
+  unique
+
+## ADD CANCER INFORMATION
+df_tidy_dam_cancer = 
+  df_tidy_dam %>% 
+  inner_join(list_cancer_cellines, by = "Cell line") %>% 
+  unique() %>% 
+  rename("Cancer" = "primary_disease")
+```
+
+```{r, fig.height=7, fig.width=5}
+library(pals)
+
+#annotation of cancer type
+my_color = list(Cancer = c(`Bile Duct Cancer` = "gainsboro", `Bladder Cancer` = 'forestgreen', `Bone Cancer` = 'red2',`Brain Cancer` = 'orange', `Breast Cancer` = 'cornflowerblue', 
+                `Cervical Cancer` = 'magenta', `Colon/Colorectal Cancer` = 'darkolivegreen4', `Endometrial/Uterine Cancer` = 'indianred1', `Esophageal Cancer` = 'tan4', `Fibroblast` = 'darkblue', 
+                `Gastric Cancer` = 'mediumorchid1', `Head and Neck Cancer` = 'firebrick4',  `Kidney Cancer` = 'yellowgreen', `Leukemia` = 'lightsalmon', `Liposarcoma` = 'tan3',
+                `Liver Cancer` = "tan1", `Lung Cancer` = 'darkgray', `Lymphoma` = 'wheat4', `Myeloma` = '#DDAD4B', `Neuroblastoma` = 'chartreuse', 
+                `Non-Cancerous` = 'seagreen1', `Ovarian Cancer` = 'moccasin', `Pancreatic Cancer` =  'mediumvioletred', `Prostate Cancer` = 'seagreen', `Rhabdoid` = 'cadetblue1',
+                `Sarcoma` = "darkolivegreen1" , `Skin Cancer` = "tan2" , `Thyroid Cancer` = "tomato3" , `Unknown` = "#7CE3D8"))
+
+
+tidyheatmap::tidy_heatmap(df_tidy_dam_cancer, 
+                          rows = Gene, 
+                          columns = `Cell line`,
+                          values = `Relative mutation`, 
+                          clustering_method = "binary", 
+                          legend = FALSE, 
+                          color_legend_min = 0,
+                          color_legend_max = 1,
+                          legend_breaks = c(0,1),
+                          legend_labels = c("no mutated", "mutated"),
+                          colors = c("#ffffff", "#ee4445"),
+                          annotation_col = Cancer,
+                          annotation_colors = my_color, 
+                          show_colnames = FALSE,
+                          ) 
+                       
+```
+
+complex heatmap to add tiles
+```{r}
+#sum mutations per cell line
+cell_line_spliceosome_mutations_ccle %>%
+  group_by(stripped_cell_line_name) %>% 
+  count() %>% 
+  rename("mutations_per_cell_line" = "n") %>% 
+  rename("Cell line" = "stripped_cell_line_name") -> mutation_per_cell_line
+
+df_tidy_dam %>% 
+  mutate(mutated = case_when(
+    `Relative mutation` > 0 ~ 1, 
+    `Relative mutation` == 0 ~ 0 
+    )) %>% 
+  select(-c(`Relative mutation`)) %>% 
+  left_join(list_cancer_cellines, by = "Cell line") %>% 
+  unique() %>% 
+  left_join(mutation_per_cell_line, by = "Cell line")-> df_complex
+
+
+
+df_complex %>%
+  heatmap(Gene, `Cell line`, mutated,
+          palette_value = circlize::colorRamp2(c(0, 1), c("white", "red"))) %>% 
+  add_tile(primary_disease) %>%
+  add_bar(mutations_per_cell_line) -> htm_binary
+
+htm_binary
+
+#prepare for heatmap
+df_wide_complex <- as.matrix(pivot_wider(df_complex, names_from = `Cell line`, values_from = mutated)) 
+
+cell_lines_list_mutated %>% 
+  filter(spliceosome_mutated == "YES") %>% 
+  distinct(stripped_cell_line_name, .keep_all = TRUE)
+
+colors = structure(1:2, names = c("1", "2"))
+Heatmap(df_wide_complex, heatmap_legend_param = list(
+        title = "mutated", at = c(0, 1), 
+        labels = c("0", "1")),column_title = "Cell lines with mutations in spliceosome genes",
+        clustering_method_rows = "binary",
+        cluster_rows = TRUE,
+        show_row_dend = TRUE,
+        show_column_names = FALSE, 
+        row_names_side = "left",
+        show_row_names = TRUE,
+        column_split = df_complex$primary_disease
+        )
+
+
+
+```
+
+
+contingency table - does cell line has splice mutations? 
+```{r}
+CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) -> cell_lines_list
+
+cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% spliceosome_mutations_ccle$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% spliceosome_mutations_ccle$stripped_cell_line_name ~ "NO")) -> cell_lines_list_mutated
+  
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated) -> summary_spliceosome_mutated_cell_lines
+
+as.data.frame(summary_spliceosome_mutated_cell_lines) 
+  colnames(summary_spliceosome_mutated_cell_lines) <- c("Disease", "Mutated", "Freq") 
+```
+formattable
+```{r}
+library(formattable)  
+
+formattable(summary_spliceosome_mutated_cell_lines,
+            align = c("l", "c", "c"),
+            list(disease = formatter(
+              "span", style = ~ style(color = "grey",font.weight = "bold"))))
+
+```
+
+further analysis in expression data
+```{r}
+cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated, primary_disease) %>% 
+  distinct() -> spliceosome_mutated_ID
+```
+
+
+## Intersection plot
+
+

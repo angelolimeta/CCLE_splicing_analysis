@@ -1,0 +1,365 @@
+---
+title: "Exploration of CLL dataset"
+author: "Leticia Castillon"
+Rstudio version: "1.3.1093"
+output: html_notebook
+---
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+load libraries
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(biomaRt)
+library(cowplot)
+library(ggpubr)
+library(data.table)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(hrbrthemes)
+library(wesanderson)
+library(EDASeq)
+library(dplyr)
+library(goseq)
+select = dplyr::select
+count = dplyr::count
+rename = dplyr::rename
+```
+
+
+## Load data
+
+```{r, message=FALSE, include=FALSE}
+CCLE_mutations <- read_delim("localdata/depmap/CCLE.csv", ",", escape_double = FALSE, trim_ws = TRUE)
+#head(CCLE_mutations)
+
+sample_info <- read_csv("localdata/depmap/sample_info.csv")
+#head(sample_info)
+```
+
+Merge both datasets (by DepMap_ID)
+```{r}
+mutations_info = left_join(CCLE_mutations, sample_info, by = c("DepMap_ID"))
+```
+
+Export to csv
+```{r}
+#write.csv(mutations_info,"/Users/castilln/Desktop/thesis/localdata/depmap/mutations_info", row.names = FALSE)
+```
+
+
+## Data exploration
+Count number of mutations per cancer
+```{r}
+mutations_per_cancer = 
+  mutations_info %>% 
+  count(primary_disease) %>% 
+  rename("freq" = "n")
+
+plot_CCLE = 
+  mutations_info %>% 
+  select(primary_disease, primary_or_metastasis) %>% 
+  left_join(mutations_per_cancer, by = "primary_disease") 
+```
+
+Plot distribution of cancer types across cell lines
+```{r, fig.width=5, fig.height=3}
+ggplot(data=plot_CCLE) +
+  geom_col(mapping = aes(x = reorder(primary_disease, freq),y = freq, fill = primary_or_metastasis)) +
+  xlab(NULL) + 
+  ylab(NULL) + 
+  labs(fill = "Primary or Metastasis") + 
+  ggtitle("Number of primary and metastatic cancer in each cell line") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 2, type = "discrete"),na.value ="black") +
+  coord_flip() 
+  #(axis.text.x = element_text(angle = 90)) +       #rotate the label
+ 
+```
+
+Repeat the plot above with counts normalized by number of cell lines studied
+```{r}
+##MUTATIONS PER CELL LINE
+cell_lines_studied = 
+  mutations_info %>% 
+  group_by(primary_disease) %>% 
+  count(CCLE_Name) %>% 
+  dplyr::rename("observed_mutations_percelline" = "n")
+
+## STUDIED CELL LINES PER CANCER
+normalize = 
+  cell_lines_studied %>% 
+  count(primary_disease) %>%
+  rename("cell_lines_number" = "n") 
+
+## MUTATIONS ACROSS ALL CELL LINES
+cell_lines_distribution = 
+  cell_lines_studied %>% 
+  count(primary_disease, wt = observed_mutations_percelline) %>% 
+  rename("observed_mutation_all_cell_lines" = "n") 
+
+
+```
+
+
+Show distribution of cell lines across the different cancer types (how many cell lines have been studied per cancer)
+```{r, fig.height=3, fig.width=4}
+ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y = cell_lines_number, fill="black")) +
+  geom_bar(stat = "identity", fill = "black")+ 
+  xlab(NULL) + 
+  ylab("Number of cell lines studied")+ 
+  ggtitle("Number of cell lines studied per cancer") +
+  geom_text(aes(label = cell_lines_number), size = 3, position = "dodge", hjust=-0.2) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip() 
+```
+
+Try to do an average of mutations (mean of mutations)
+```{r}
+cell_lines_distribution = 
+  right_join(cell_lines_distribution, normalize, by = "primary_disease", copy = TRUE)
+
+cell_lines_distribution = 
+  cell_lines_distribution %>% 
+  mutate(normalized_mutations = observed_mutation_all_cell_lines / cell_lines_number) %>% 
+  arrange(normalized_mutations)
+
+ggplot(data = cell_lines_distribution, aes(x = reorder(primary_disease, normalized_mutations), y = normalized_mutations)) +
+  geom_col(fill = "black") +
+  geom_text(aes(label = sprintf("%0.0f", round(normalized_mutations, digits =0))), size = 2.5, position = "dodge", hjust=-0.05) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip() + 
+  xlab(NULL) + 
+  ylab("Observed mutations normalized for cell lines studied")
+
+```
+
+Retrieve database with HUGO symbol nomenclature 
+```{r}
+#ensembl <- useMart("ensembl")
+#datasets <- listDatasets(ensembl)
+#view(datasets)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+
+#get list of all available filters
+#filters <- listFilters(ensembl) 
+
+```
+
+## Get gene length
+Fetch gene symbols, to be used instead of gene ensembl id
+```{r}
+#create vector with the Hugo Symbols that we want
+id_list = mutations_info %>% 
+  select(Hugo_Symbol) %>% 
+  distinct() %>% 
+  pull(Hugo_Symbol)
+
+#gene list with hugo symbol and entrez id / ensembl id 
+genes_list =
+ getBM(filters= "hgnc_symbol", attributes= c("ensembl_gene_id","hgnc_symbol", "description"), 
+       values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+
+ensembl_list =  
+  genes_list %>% 
+  pull(ensembl_gene_id)
+
+#GET GENE AND TRANSCRIPT LENGTH
+getlength(ensembl_list, 'hg19', 'ensGene') #output into hg19.ensGene.LENGTH
+
+#rename length output
+length = hg19.ensGene.LENGTH
+#write.csv(length, "./localdata/gene_length.csv") #save as csv to local 
+length = 
+  length %>% 
+  rename("ensembl_gene_id" = "Gene") #obs length depends on transcript id, no gene id
+
+#merge length and gc content with hugo symbol & gene info
+gene_length_list = 
+  left_join(genes_list, length, by = "ensembl_gene_id", copy = TRUE) %>%
+  select(hgnc_symbol, Length, Transcript) %>% 
+  rename("Hugo_Symbol" = "hgnc_symbol")
+
+write_csv(gene_length_list, "../../../localdata/gene_length.csv", quote = FALSE)
+```
+
+## Normalize for gene length
+
+Normalize the amount of mutations by length of the gene
+```{r}
+#GET ENS ID OF AFFECTED TRANSCRIPT
+transcripts =
+mutations_info %>% 
+  select(DepMap_ID, Hugo_Symbol, Annotation_Transcript)
+  
+transcripts$Annotation_Transcript = gsub("\\..*", "", transcripts$Annotation_Transcript) 
+
+
+#FIND DUPLICATES
+test_tr_1 = 
+transcripts %>%  
+  filter(DepMap_ID == "ACH-000001")  
+
+test_tr_1[test_tr_1$Hugo_Symbol %in% test_tr_1$Hugo_Symbol[duplicated(test_tr_1$Hugo_Symbol)],]
+  
+```
+
+
+
+
+```{r}
+#count mutations per gene and cancer, add transcript info
+
+##GET RID OF TRANSCRIPT VERSION (ENSXXXXX.X)
+mutations_info$Annotation_Transcript = gsub("\\..*", "", mutations_info$Annotation_Transcript) 
+
+  
+mut_per_gene_cancer = 
+  mutations_info %>% 
+  group_by(Annotation_Transcript, primary_disease) %>% 
+  tally() %>% 
+  #count w/o adding extra grouping 
+  rename("mutation_nr" = "n") %>% 
+  left_join(transcripts, by = "Annotation_Transcript") %>% 
+  rename("Transcript" = "Annotation_Transcript") %>% 
+  ungroup() %>% 
+  select(-Hugo_Symbol) 
+
+#normalize per length of transcript
+norm_mut_per_gene_cancer = 
+left_join(mut_per_gene_cancer, gene_length_list, by="Transcript") %>% 
+  mutate(norm_mutations = mutation_nr/Length) 
+```
+
+## Top mutated genes per cancer
+
+```{r}
+##CREATE PALETTE FOR PLOT 
+#DEFINE NUMBER OF COLORS
+nb.cols <- 50
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+top_mutations = 
+norm_mut_per_gene_cancer %>% 
+  select(-DepMap_ID) %>% 
+  arrange(desc(norm_mutations)) %>%
+  group_by(primary_disease) %>% 
+  unique() %>% 
+  top_n(3) 
+
+top_mutations = 
+  top_mutations %>% 
+  filter(Hugo_Symbol != "NA")
+
+top_mutations$primary_disease = 
+reorder(top_mutations$primary_disease, top_mutations$norm_mutations)
+
+ggplot(data = top_mutations, aes(x = reorder(primary_disease, norm_mutations), y = norm_mutations, fill = Hugo_Symbol)) +
+  geom_col() + 
+  scale_fill_manual(values = mycolors) +
+  #geom_text(aes(label = Hugo_Symbol)) +
+  coord_flip() + 
+  xlab(NULL) + 
+  ylab("Most mutated genes per cancer") + 
+  theme_bw() + 
+  theme(
+  panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank())
+```
+
+
+## Top mutated genes across all cancers (considering only most mutated transcript)
+```{r}
+most_mutated_genes = 
+  mutations_info %>% 
+  filter(Variant_Classification != "Silent") %>% 
+  group_by(Hugo_Symbol) %>% 
+  tally() %>% 
+  rename("observed_mutations" = "n") %>% 
+  left_join(gene_length_list, by = "Hugo_Symbol") %>% 
+  mutate(normalized_mutations = observed_mutations/Length) %>% 
+  arrange(desc(normalized_mutations)) %>%
+  distinct(Hugo_Symbol ,.keep_all = TRUE) %>% #discard alternative transcripts, keep most mutated one
+  top_n(50)
+
+#reorder
+most_mutated_genes$Hugo_Symbol <- reorder(most_mutated_genes$Hugo_Symbol, most_mutated_genes$normalized_mutations)
+```
+
+plot
+```{r, fig.width=5, fig.height=6}
+  ggplot(data = most_mutated_genes, aes(x = Hugo_Symbol, y = normalized_mutations)) +
+  geom_col(fill = "black") +
+  coord_flip() +
+  theme_bw()+ 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) +
+  ylab("Most mutated genes across cancer cell lines")
+
+```
+
+# Barplot with mutation classification
+```{r}
+##AVOID SCIENTIFIC NOTATION
+options(scipen = 1000000)
+
+##COUNT OCCURENCE OF EACH MUTATION CLASS
+mutation_class = 
+  CCLE_mutations %>% 
+  count(Variant_Classification) %>% 
+  rename("Frequency" = "n")
+
+##PLOT
+ggplot(data = mutation_class, aes(x = reorder(Variant_Classification, Frequency), y = Frequency, fill="black")) +
+  geom_bar(stat = "identity", fill = "black")+ 
+  xlab("Mutation classification") + 
+  ylab("Number of mutations")+ 
+  ggtitle("") +
+  theme_bw() +
+  theme(axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip()
+```
+

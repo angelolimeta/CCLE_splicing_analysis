@@ -1,0 +1,195 @@
+---
+title: "Drug sensitivity exploration for cell lines with mutated spliceosome vs. cell lines without mutated spliceosome"
+author: "Leticia Castillon"
+date: "14-12-2020"
+output: html_notebook
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(edgeR)
+library(dplyr)
+library(readr)
+library(biomaRt)
+library(cowplot)
+library(ggpubr)
+library(ggplot2)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(KEGGREST)
+library(hrbrthemes)
+library(wesanderson)
+library(data.table)
+library(Rtsne)
+library(RColorBrewer)
+library(gridExtra)
+select = dplyr::select
+rename = dplyr::rename
+```
+
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+
+#load expression data & generate spliceosome dataframes
+```{r}
+##SENSITIVITY DATA
+CCLE_drug <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/primary-screen-replicate-collapsed-logfold-change.csv", header = TRUE) 
+#rows: tumor sample barcode
+#column: genes
+#values: expression
+
+##MUTATION INFO 
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) #mutations and sample info 
+
+## LIST OF MUTATIONS IN THE SPLICEOSOME
+spliceosome_mutations = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Contingency table - does cell line has splice mutations? 
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+   cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "YES",  
+            !cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "NO")) 
+  
+##CREATE SUMMARY TABLE
+summary_spliceosome_mutated_cell_lines = 
+  table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated) %>% 
+  as.data.frame() 
+
+#GIVE COLUMN NAMES
+colnames(summary_spliceosome_mutated_cell_lines) <- c("Disease", "Mutated", "Freq") 
+  
+
+##GET UNIQUE ID
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated, primary_disease) %>% 
+  distinct() 
+```
+
+Join spliceosome mutation information with drug sensitivity data
+```{r}
+colnames(CCLE_drug)[1] <- "DepMap_ID"
+
+sensitivity_plus_spliceosome = 
+  left_join(CCLE_drug, spliceosome_mutated_ID, by = "DepMap_ID")  #join spliceosome and disease data
+```
+
+Prepare for tsne/pca
+```{r}
+sensitivity_pca <- as.matrix(sensitivity_plus_spliceosome[,1:4687])
+
+#EXPRESSION VALUES: 
+sensitivity <- as.matrix(sensitivity_plus_spliceosome[, 2:4687])
+
+sensitivity[is.na(sensitivity)] <- 0 
+sum(is.na(sensitivity))
+#DISEASE:
+disease <- sensitivity_plus_spliceosome[, 4689]
+#SPLICEOSOME ANNOTATION:
+mutated <- sensitivity_plus_spliceosome[, 4688]
+```
+
+Run PCA
+```{r,  fig.height=4, fig.width=7}
+pca1 = prcomp(sensitivity, center = TRUE)
+
+plotData = pca1$x[,1:2]
+plotData = cbind(DepMap_ID = sensitivity_pca[,1], plotData)
+rownames(plotData) = NULL
+
+head(plotData)
+
+ID = plotData[,1]
+
+#PREPARE DATA TO PLOT
+plotData_gg = 
+  plotData %>% 
+  as_tibble() %>% 
+  left_join(spliceosome_mutated_ID, by ="DepMap_ID") %>%
+  mutate(PC1 = as.double(PC1),
+         PC2 = as.double(PC2))  
+```
+
+Plot
+```{r,  fig.height=4, fig.width=12}
+##ONLY SHOW WHETHER THE CELL LINE HAS MUTATIONS IN THE SPLICEOSOME
+gg_mutated = 
+  ggplot(plotData_gg, aes(x = PC1,y = PC2, color = spliceosome_mutated)) +
+  geom_point() +
+  facet_wrap(vars(primary_disease), scales = "free") + 
+  stat_ellipse() 
+  
+#SHOW DISEASE DATA 
+gg_disease = 
+ggplot(plotData_gg, aes(x = PC1,y = PC2, color = primary_disease)) +
+  geom_point() +
+  scale_color_manual(values = c("gainsboro", 'forestgreen', 'red2', 'orange',  'cornflowerblue', 
+                'magenta', 'darkolivegreen4',  'indianred1',  'tan4', 'darkblue', 
+                'mediumorchid1', 'firebrick4',  'yellowgreen', 'lightsalmon', 'tan3',
+                "tan1",  'darkgray','wheat4',  '#DDAD4B',  'chartreuse', 
+                 'seagreen1', 'moccasin',   'mediumvioletred', 'seagreen', 'cadetblue1',
+                "darkolivegreen1" ,"tan2" ,  "tomato3" , "#7CE3D8", "black", "darkblue", "violetred", "black"))
+ 
+
+#TO PRINT BOTH PLOTS TOGETHER 
+grid.arrange(gg_disease, gg_mutated, ncol = 2)
+```
+
+
+Run t-SNE
+```{r}
+set.seed(6)
+
+tsne_results = 
+  Rtsne(sensitivity, dims = 2, perplexity = 30, theta = 0.5, check_duplicates = FALSE, pca = TRUE)
+
+##PLOT
+plotData =
+  tsne_results$Y %>% 
+  as_tibble() %>% 
+  mutate(DepMap_ID = ID)
+
+#ADD ANNOTATION DATA
+plotData = 
+  plotData %>% 
+  left_join(spliceosome_mutated_ID, by ="DepMap_ID") %>% 
+  mutate(V1 = as.double(V1),
+         V2 = as.double(V2))
+ 
+plotData %>% 
+  ggplot(aes(x = V1,y = V2, color = spliceosome_mutated)) +
+  geom_point(size = 2, alpha = 0.5) +
+  xlab(element_blank()) +
+  ylab(element_blank()) +
+  facet_wrap(vars(primary_disease)) +
+  theme_bw() +
+  ggtitle("tSNE") +
+  theme(legend.position = "bottom",
+        aspect.ratio = 1,
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = c('forestgreen', 'red2'))
+
+
+```

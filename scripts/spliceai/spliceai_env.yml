@@ -1,0 +1,9 @@
+name: spliceai
+channels:
+  - defaults
+dependencies:
+  - tensorflow
+  - pip:
+    - spliceai
+    
+
