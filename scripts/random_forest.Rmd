@@ -1,0 +1,166 @@
+---
+title: "Random forest"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(randomForest)
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data - transcription profile & dependencies
+```{r}
+transcripts = read_csv("depmap/CCLE_RNAseq_transcripts.csv")
+
+#METADATA
+sample_info <- read_csv("depmap/sample_info.csv") 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("depmap/mutations_spliceosome.csv")
+
+#DEPENDENCY DATA
+dep_df = fread("depmap/achilles/Achilles_gene_dependency.csv")
+
+#CCLE SNP data
+ccle = fread("depmap/CCLE_info")
+```
+
+Annotate mutations in the spliceosome
+```{r}
+long_dep = 
+  dep_df %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "GENES", values_to = "DEPENDENCY")
+
+long_dep = 
+  long_dep %>%
+    separate(col = "GENES", into = c("GENE", "ENTREZ"), sep = "\\s") 
+   
+long_dep$ENTREZ <- gsub("\\(|\\)","",as.character(long_dep$ENTREZ))
+```
+
+```{r}
+head(mutations_spliceosome)
+
+head(long_dep)
+```
+
+```{r}
+head(ccle)
+
+ccle = 
+  ccle %>% 
+  select(c("DepMap_ID", "primary_disease", "Variant_Classification", "Hugo_Symbol", "stripped_cell_line_name")) %>% 
+  rename("GENE" = "Hugo_Symbol")
+```
+
+Annotate disease information
+```{r}
+long_dep_ann = 
+  long_dep %>% 
+  left_join(ccle, by = c("DepMap_ID", "GENE"))
+
+head(long_dep_ann)
+```
+Annotate spliceosome
+```{r}
+long_dep_ann = 
+  long_dep_ann %>% 
+  mutate(spliceosome_mutated = case_when(
+     long_dep_ann$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !long_dep_ann$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) 
+
+
+head(long_dep_ann)
+```
+
+```{r}
+pretrain_df = 
+  long_dep_ann %>% 
+  drop_na(primary_disease) %>% 
+  select(-c("ENTREZ", "stripped_cell_line_name"))
+
+head(pretrain_df)
+```
+Join data about Shannon entropy
+```{r}
+shannon = readRDS("shannon/res_shannonEntropy.rds")
+shannon_line = readRDS("../github/results/shannon_list_cell_line.rds")
+
+view(shannon_line)
+```
+
+```{r}
+##CREATE DF
+shannon_line = 
+  shannon_line %>% 
+  as.data.frame()
+
+##PIVOT LONGER
+shannon_line = 
+shannon_line %>% 
+  pivot_longer(cols = everything(), names_to = "DepMap_ID", values_to = "SHANNON")
+
+##EXTRACT DEPMAP ID TO REPLACE "."
+shanon_dep = 
+  shannon_line %>% 
+  select(DepMap_ID)
+
+##GSUB
+shannon = map_df(shanon_dep, ~ gsub("\\.", "-", .x))
+
+##BIND NEW COLUMN WITH SHANNON VALUES
+shannon_df = cbind(shannon, shannon_line)
+shannon_df = shannon_df[-2]
+
+head(shannon_df)
+```
+
+
+Join Shannon entropy to data
+```{r}
+long_df = 
+  pretrain_df %>% 
+  left_join(shannon_df, by = "DepMap_ID")
+
+head(long_df)
+```
+
+Pivot wider
+```{r}
+train_df = 
+  long_df %>% 
+  select(c("DepMap_ID", "GENE", "DEPENDENCY", "primary_disease")) %>% 
+  pivot_wider(names_from = GENE, values_from = DEPENDENCY)
+```
+
+
+Create random forest for regression
+```{r}
+dep.rf = 
+  randomForest(DEPENDENCY ~ ., data = train_df, mtry = 3, importance = TRUE, na.action = na.omit)
+```
+
+```{r}
+#saveRDS(dep.rf, file = "../github/scripts/dep_RF")
+```
+```{r}
+#dep.rf = readRDS("../github/scripts/dep_RF")
+```
+
+Plot importance of predictor variables
+```{r}
+varImpPlot(dep.rf)
+```
+
+```{r}
+print(dep.rf)
+print(importance(dep.rf, type=2))
+```
+

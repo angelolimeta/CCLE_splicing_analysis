@@ -1,0 +1,232 @@
+---
+title: "Gene effect - pan cancer and per cancer - transformed data"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(readr)
+library(data.table)
+library(skimr)
+library(moderndive)
+library(gapminder)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Load data
+```{r}
+##GENE EFFECT
+gene_eff_df <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_effect.csv", header = TRUE) 
+
+#METADATA
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Create meta data of interest
+```{r}
+meta = 
+  sample_info %>% 
+  select(c("DepMap_ID", "stripped_cell_line_name", "primary_disease"))
+```
+
+
+Join tidy crispr data and join with metadata
+```{r}
+gene_eff_meta = 
+  gene_eff_df %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "value") %>% 
+  left_join(meta, by = "DepMap_ID")
+```
+
+Annotate mutations in the spliceosome
+```{r}
+gene_eff_mutated = 
+ gene_eff_meta %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            gene_eff_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !gene_eff_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) 
+```
+
+
+```{r}
+table(distinct(gene_eff_mutated)$primary_disease,distinct(gene_eff_mutated)$spliceosome_mutated)
+```
+
+## Pre-processing: quality check. 
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Bile Duct Cancer", "Leukemia","Pancreatic Cancer")
+
+df_filt = 
+  gene_eff_mutated %>% 
+  filter(primary_disease %in% keep) %>% 
+  drop_na()
+```
+
+Create a new column for entrez ID 
+```{r}
+df_filt = 
+  df_filt %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "entrez_id"), sep = "\\s") 
+   
+df_filt$entrez_id <- gsub("\\(|\\)","",as.character(df_filt$entrez_id))
+```
+
+```{r}
+head(df_filt)
+```
+
+## Square root transformation
+```{r}
+norm_df_filt = 
+  df_filt %>% 
+  mutate(trans_value = (sign(value) * abs(value)^(1/3))) %>% 
+  mutate(primary_disease = as.factor(primary_disease))
+
+head(norm_df_filt)
+```
+
+```{r}
+ggplot(norm_df_filt, aes(sample = trans_value)) + 
+  facet_wrap(facets = "primary_disease") +
+  stat_qq() + 
+  stat_qq_line() 
+```
+
+```{r}
+ggplot(norm_df_filt, aes(y = trans_value, x = spliceosome_mutated, fill = spliceosome_mutated)) + 
+  geom_boxplot() + 
+  facet_wrap(facets = norm_df_filt$primary_disease)
+```
+
+```{r}
+norm_df_filt %>% skim()
+```
+
+```{r}
+library(ggjoy)
+ggplot(norm_df_filt, aes(x = trans_value, y = spliceosome_mutated)) + 
+  geom_joy(scale = 2, alpha=0.5) + 
+  theme_joy() +
+  facet_grid(facets = norm_df_filt$primary_disease)
+```
+
+Use SAnderson-Darling normality test
+```{r}
+library(nortest)
+
+ad.test(norm_df_filt$trans_value)
+```
+```{r}
+head(norm_df_filt)
+```
+
+
+Repeat wilcoxon test per cancer 
+```{r}
+library(broom)
+##LIST OF CANCERS
+list_cancer = 
+  norm_df_filt %>% 
+  pull(primary_disease) %>% 
+  unique()
+
+##EMPTY LIST TO STORE LINEAR MODELS
+wilc_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    norm_df_filt %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  wilc_list[[paste0("wilc.", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-Hugo_Symbol) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~wilcox.test(trans_value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```
+
+Pancreatic cancer
+```{r}
+wilc_list$`wilc.Pancreatic Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Ovarian cancer
+```{r}
+wilc_list$`wilc.Bone Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Bile Duct cancer
+```{r}
+wilc_list$`wilc.Bile Duct Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(p.value)
+```
+
+
+```{r}
+wilc_list$`wilc.Leukemia` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+
+Repeat analysis per cancer - t-test
+```{r}
+##EMPTY LIST TO STORE LINEAR MODELS
+t_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    norm_df_filt %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  t_list[[paste0("t.", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-Hugo_Symbol) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~t.test(trans_value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```
+Pancreatic cancer
+```{r}
+t_list$`t.Pancreatic Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```

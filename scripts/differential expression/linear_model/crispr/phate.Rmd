@@ -1,0 +1,73 @@
+---
+title: "phate"
+output: html_notebook
+---
+
+```{r}
+library(phateR)
+library(data.table)
+library(tidyverse)
+```
+
+*Changed path to python in .Renviron file 
+
+Load dependency data
+```{r}
+dep_df = fread("~/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_dependency.csv")
+
+sample_info = fread("../../../../../localdata/depmap/sample_info.csv")
+```
+
+```{r}
+dep_ph = 
+  dep_df %>% 
+  as.matrix()
+
+row.names(dep_ph) <- dep_ph[,1]
+
+dep_ph <- dep_ph[,-1]
+
+head(dep_ph)
+
+dep_ph[is.na(dep_ph)] <- 0 
+```
+
+
+Let's try to run PHATE
+```{r}
+dep_phate = phate(dep_ph, gamma=0, knn = 20)
+```
+
+```{r}
+meta = 
+  sample_info %>% 
+  select(c("primary_disease", "DepMap_ID"))
+
+long_df = 
+  dep_df %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "GENE", values_to = "VALUE")
+```
+
+```{r}
+head(long_df)
+
+lond_dis_df = 
+  long_df %>% 
+  left_join(meta, by = "DepMap_ID")
+```
+
+
+```{r}
+summary(dep_phate)
+```
+
+```{r}
+palette(rainbow(10))
+plot(dep_phate)
+```
+
+```{r}
+ggplot(dep_phate) + 
+  geom_point(aes(PHATE1, PHATE2, color = long_dis_df$primary_disease))
+```
+

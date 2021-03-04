@@ -1,0 +1,142 @@
+---
+title: "raw reads t-test"
+output: html_notebook
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(edgeR)
+library(readr)
+library(biomaRt)
+library(data.table)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+# Load expression data & spliceosome data
+```{r}
+raw_reads <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_reads.csv") 
+#rows: tumor sample barcode
+#column: genes
+
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) #mutations and sample info 
+
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+```{r}
+#Rename so that raw reads table has same variable name as metadata
+raw_reads = 
+  raw_reads %>% 
+  rename("DepMap_ID" = "X1")
+
+#join expression data with metadata
+longraw_reads_info =
+  raw_reads %>%
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "counts") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+
+head(longraw_reads_info)
+```
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Breast Cancer", "Fibroblast", "Leukemia", "Lung Cancer", "Ovarian Cancer", "Pancreatic Cancer", "Sarcoma", "Skin Cancer")
+
+df_deseq = 
+longraw_reads_info %>% 
+  filter(primary_disease %in% keep)
+```
+
+Create a new column for ensembl gene ID 
+```{r}
+df_deseq = 
+  df_deseq %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s") 
+   
+df_deseq$ensembl_id <- gsub("\\(|\\)","",as.character(df_deseq$ensembl_id))
+
+head(df_deseq)
+```
+
+## Preprocessing
+Let's visualize the distribution of the counts
+```{r}
+library(ggdist)
+ggplot(df_deseq, aes(x=counts)) +
+  geom_histogram(aes(y=..density..), position="identity", alpha=0.5) + 
+  geom_density(alpha=0.6)
+```
+
+Filter out those genes whose median for expression is lower than 1 across all samples
+```{r}
+median_counts =
+  df_deseq %>% 
+  group_by(Hugo_Symbol) %>% 
+  dplyr::mutate(median = median(counts, na.rm=TRUE)) %>% 
+  filter(median >= 1)
+```
+
+Plot again
+```{r}
+ggplot(median_counts, aes(x=counts)) +
+  geom_histogram(aes(y=..density..), position="identity", alpha=0.5) + 
+  geom_density(alpha=0.6)
+```
+
+# t-test
+```{r}
+
+median_counts %>% 
+  select(DepMap_ID, Hugo_Symbol, counts, spliceosome_mutated) %>% 
+  filter(spliceosome_mutated == "NO") %>% 
+  select(c(Hugo_Symbol, counts))-> no_t_expression
+
+#head(no_t_expression)
+
+#filt_CCLE_expression %>% 
+median_counts %>% 
+  select(DepMap_ID, Hugo_Symbol, counts, spliceosome_mutated) %>% 
+  filter(spliceosome_mutated == "YES") %>% 
+  select(c(Hugo_Symbol, counts)) -> yes_t_expression
+
+#head(yes_t_expression)
+
+t.test(no_t_expression$counts, yes_t_expression$counts, alternative = "two.sided", var.equal = FALSE)
+```

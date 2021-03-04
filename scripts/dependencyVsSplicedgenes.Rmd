@@ -1,0 +1,190 @@
+---
+title: "Relate dependencies with genes most frequently affected by splicing"
+output: html_notebook
+---
+
+Load libraries 
+```{r}
+library(tidyverse)
+library(data.table)
+library(RColorBrewer)
+```
+
+Load data
+```{r}
+transcripts <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+dependency <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_dependency.csv")
+
+CCLE <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info")
+```
+```{r}
+ccle_df = 
+  CCLE %>% 
+  select(Hugo_Symbol, DepMap_ID, primary_disease, Variant_Classification) %>% 
+  rename("SYMBOL" = "Hugo_Symbol")
+
+head(ccle_df)
+```
+
+Pivot longer dependency matrix
+```{r}
+long_dep = 
+  dependency %>% 
+  pivot_longer(cols= -DepMap_ID, names_to = "SYMBOL", values_to = "DEPENDENCY")
+
+head(long_dep)
+```
+Create a new column for entrez ID 
+```{r}
+long_dep = 
+  long_dep %>%
+    separate(col = "SYMBOL", into = c("SYMBOL", "ENTREZ"), sep = "\\s") 
+   
+long_dep$ENTREZ <- gsub("\\(|\\)","",as.character(long_dep$ENTREZ))
+```
+
+Annotate the cell lines in the dependency data frame
+```{r}
+ann_lines_dep = 
+  long_dep %>% 
+  left_join(ccle_df, by = c("DepMap_ID", "SYMBOL"))
+
+head(ann_lines_dep)
+```
+Some genes were not present in SNP 
+```{r}
+ccle_dep = 
+  ann_lines_dep %>% 
+  drop_na(primary_disease)
+
+head(ccle_dep)
+
+
+ccle_dep %>% 
+  group_by(DepMap_ID) %>% 
+  count(SYMBOL) %>% 
+  filter(n > 1)
+```
+
+Let's see if there is some change in dependencies between those mutations that affect the splice site and the rest
+```{r}
+library(broom)
+lm_res =
+  ccle_dep %>% 
+  ##NEST BY TRANSCRIPT
+  nest(-DepMap_ID) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~lm(DEPENDENCY ~ Variant_Classification, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+
+
+lm_res
+```
+FDR 
+```{r}
+lm_res %>% 
+  filter(term == "Variant_ClassificationSplice_Site") %>% 
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+Plot dependencies for the differrent mutation types
+```{r, fig.width=10, fig.height=7}
+##CUSTOM PALETTE
+nb.cols <- 20
+mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(nb.cols)
+
+##PLOT
+  ggplot(ccle_dep, aes(x = Variant_Classification, y = DEPENDENCY, fill = Variant_Classification)) +
+  geom_boxplot() +
+  scale_fill_manual(values = mycolors) + 
+  facet_wrap(facets = "primary_disease") + 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) + 
+    geom_hline(yintercept=0.5, linetype="dashed", color = "black")
+  
+```
+
+Save plot 
+```{r}
+ggsave(filename = "dependenciesVsMutationType.png", path = "../../figures/results/", width = 10, height = 7)
+```
+
+Kruskal wallis
+```{r}
+ccle_dep = 
+  ccle_dep %>% 
+  mutate(Variant_Classification = as.factor(Variant_Classification), 
+         primary_disease = as.factor(primary_disease))
+
+head(ccle_dep)
+```
+```{r}
+kruskal.test(DEPENDENCY ~ Variant_Classification, data = ccle_dep)
+```
+```{r}
+kruskal_res = 
+  ccle_dep %>% 
+  nest(DepMap_ID) %>% 
+  mutate(model = map(data, ~kruskal.test(DEPENDENCY ~ Variant_Classification, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+
+
+kruskal_res
+```
+
+Include only genes for which we have more than one type of mutation
+Find those genes with only one kind of annotated mutation
+```{r}
+ unique_symbol =  
+  ann_dep_ccle %>% 
+  group_by(SYMBOL) %>% 
+  count(Variant_Classification) %>% 
+  count(SYMBOL) %>% 
+  filter(n == 1) %>% 
+  pull(SYMBOL) %>% 
+  as.data.frame()
+
+colnames(unique_symbol) <- "SYMBOL"
+```
+
+Filter those out of our df
+```{r}
+ann_dep_ccle =
+  ann_dep_ccle %>% 
+  anti_join(unique_symbol, by = "SYMBOL")
+
+head(ann_dep_ccle)
+```
+
+Is the type of mutation a good predictor of the dependency value ? 
+```{r}
+lm_res =
+  ann_dep_ccle %>% 
+  ##NEST BY TRANSCRIPT
+  nest(-DepMap_ID) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~lm(DEPENDENCY ~ primary_disease, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+```
+Find those symbols with more than one type of mutation in different cell lines 
+```{r}
+
+```
+

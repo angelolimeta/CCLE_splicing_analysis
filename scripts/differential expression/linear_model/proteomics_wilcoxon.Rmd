@@ -1,0 +1,52 @@
+---
+title: "Proteomics wilcoxon"
+output: html_notebook
+---
+
+#Libraries
+```{r}
+library(tidyverse)
+```
+
+load proteomics data
+```{r}
+CCLE_proteomics <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/proteomics/Proteomics.csv", header = TRUE) 
+CCLE_proteomics %>% rename("DepMap_ID" = "V1") -> CCLE_proteomics
+
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) #mutations and sample info 
+
+full_spliceosome_mutations = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+
+Contingency table - does cell line has splice mutations? 
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+   cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "YES",
+            !cell_lines_list$stripped_cell_line_name %in% full_spliceosome_mutations$stripped_cell_line_name ~ "NO")) 
+##CREATE SUMMARY TABLE
+summary_spliceosome_mutated_cell_lines = 
+  table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated) %>% 
+  as.data.frame() 
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated, primary_disease) %>% 
+  distinct()  
+```
+
+join spliceosome mutation information with proteomics data
+```{r}
+prot_plus_spliceosome = 
+  left_join(CCLE_proteomics, spliceosome_mutated_ID, by = "DepMap_ID")  #join spliceosome and disease data
+#head(prot_plus_spliceosome)
+
+
+```

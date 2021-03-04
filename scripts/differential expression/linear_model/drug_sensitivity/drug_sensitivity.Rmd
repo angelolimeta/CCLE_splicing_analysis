@@ -1,0 +1,275 @@
+---
+title: "Drug  sensitivity"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(readr)
+library(biomaRt)
+library(data.table)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+drug_df <- fread("depmap/primary-screen-replicate-collapsed-logfold-change.csv", header = TRUE) 
+
+#METADATA
+sample_info <- read_csv("depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("depmap/mutations_spliceosome.csv")
+```
+
+Rename V1 to DepMap_ID
+```{r}
+drug_df = 
+  drug_df %>% 
+  rename("DepMap_ID" = "V1")
+```
+
+Create meta data of interest
+```{r}
+meta = 
+  sample_info %>% 
+  select(c("DepMap_ID", "stripped_cell_line_name", "primary_disease"))
+```
+
+Join tidy crispr data and join with metadata
+```{r}
+drug_meta = 
+  drug_df %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "drug", values_to = "value") %>% 
+  left_join(meta, by = "DepMap_ID")
+```
+
+Annotate mutations in the spliceosome
+```{r}
+drug_meta = 
+ drug_meta %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            drug_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !drug_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) 
+```
+
+
+```{r}
+table(distinct(drug_meta)$primary_disease,distinct(drug_meta)$spliceosome_mutated)
+```
+
+## Pre-processing: quality check. 
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Bile Duct Cancer", "Brain Cancer", "Head and Neck Cancer",  "Lung Cancer", "Pancreatic Cancer")
+
+df_filt = 
+  drug_meta %>% 
+  filter(primary_disease %in% keep) %>% 
+  drop_na()
+
+
+##CHECK THERE ARE NO DUPLICATES
+#df_filt %>% 
+ # dim()
+
+#df_filt %>% 
+# distinct() %>% 
+# dim()
+```
+
+```{r}
+head(df_filt)
+```
+
+
+QQ plots
+```{r}
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "top")
+  )
+
+##PLOT 
+ggplot(df_filt, aes(sample = value)) + 
+  facet_wrap(facets = "primary_disease") +
+  stat_qq() + 
+  stat_qq_line() 
+```
+```{r}
+head(df_filt)
+```
+
+
+Lets try to standardize the data 
+```{r}
+st_df_filt = 
+  df_filt
+```
+
+
+## Wilcoxon-test
+Estimate significance using a non-parametric method
+Prepare data for Wilcoxon 
+```{r, message=FALSE}
+df_filt %>% 
+  group_by(spliceosome_mutated) %>% 
+  summarise(
+    count = n(),
+    median = median(value, na.rm = TRUE),
+    IQR = IQR(value, na.rm = T)
+    )
+```
+
+Visualize data 
+```{r}
+ggboxplot(df_filt, x = "spliceosome_mutated", y = "value", 
+          color = "spliceosome_mutated", palette = c("mediumvioletred","midnightblue"), 
+          ylab = "Gene effect", xlab = "Defective spliceosome")
+```
+
+2 samples Wilcoxon test
+```{r}
+res <- wilcox.test(value  ~ spliceosome_mutated, data = df_filt, exact = FALSE)
+
+res
+```
+Print p-value 
+```{r}
+res$p.value
+```
+
+# Wilcoxon test per cell line
+
+Fit directly to linear model
+```{r}
+library(broom)
+wilc_res =
+  df_filt %>% 
+  ##NEST BY CELL LINE
+  nest(-drug) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~wilcox.test(value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+
+
+head(wilc_res)
+```
+
+FDR 
+```{r}
+wilc_res %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(p.value) %>% 
+  head()
+```
+Repeat wilcoxon test per cancer - FIX ERROR. NOT ALL DRUGS HAVE BOTH FACTORS
+```{r}
+##LIST OF CANCERS
+list_cancer = 
+  df_filt %>% 
+  pull(primary_disease) %>% 
+  unique()
+
+##EMPTY LIST TO STORE LINEAR MODELS
+wilc_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    df_filt %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  wilc_list[[paste0("wilc.", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-drug) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~wilcox.test(value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```
+
+```{r}
+print(list_cancer)
+
+```
+
+Pancreatic cancer
+```{r}
+wilc_list$`lm.Pancreatic Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+
+t-test
+```{r}
+library(broom)
+t_res =
+  df_filt %>% 
+  ##NEST BY CELL LINE
+  nest(-drug) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~t.test(value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>%
+  unnest(tidied) %>% 
+  select(-c("data", "model"))
+
+
+head(t_res)
+```
+
+
+Repeat t-test per cancer
+```{r}
+##EMPTY LIST TO STORE LINEAR MODELS
+t_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    df_filt %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  t_list[[paste0("t", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-Hugo_Symbol) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~t.test(value ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```

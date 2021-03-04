@@ -1,0 +1,146 @@
+---
+title: "Does any of the SpliceAI predicted splicing mutations have a high dependency?"
+output: html_notebook
+---
+
+Load libraries 
+```{r}
+library(tidyverse)
+library(data.table)
+```
+
+Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+Load linear model & df
+```{r}
+##DEPENDENCIES
+dependencies_df <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_dependency.csv", header = TRUE)
+
+#MUTATIONS AND METADATA
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+
+## READ SPLICEAI RESULTS
+predicted_splice <- readRDS("github/results/spliceAI/ths8.rds") 
+```
+
+From spliceAI predictions, select the off-target mutations
+```{r}
+predicted_na = 
+  predicted_splice %>% 
+  filter(is.na(DepMap_ID)) %>% 
+  select(-c("primary_disease", "Variant_Classification", "Annotation_Transcript"))
+```
+
+Annotate primary disease
+```{r}
+head(CCLE_mutations)
+
+lines_dis = 
+  CCLE_mutations %>% 
+  select(primary_disease, stripped_cell_line_name, DepMap_ID) %>% 
+  distinct() %>% 
+  rename("ID" = "stripped_cell_line_name",
+         "DISEASE" = "primary_disease")
+predicted_na = 
+  predicted_na %>% 
+  left_join(lines_dis, by = "ID") %>% 
+  as.data.table()
+```
+
+Get the name of the cell lines that have off target splice
+```{r}
+cell_lines_na = 
+  predicted_na %>% 
+  pull(ID) %>% 
+  unique() %>% 
+  as.data.frame()
+
+colnames(cell_lines_na) <- "stripped_cell_line_name"
+```
+
+In this way we get a DepMap ID for the SNP, but keep in mind that that DepMap ID refers to other mutation in the same gene. 
+
+Use the cell line ID to extract the DepMap ID
+```{r}
+na_depmap = 
+  CCLE_mutations %>% 
+  semi_join(cell_lines_na, by = "stripped_cell_line_name") %>% select(DepMap_ID) %>% 
+  unique()
+```
+
+
+Use the DepMap ID to filter those cell lines for which dependencies have been calculated that also had predicted off target splicing
+```{r}
+filt_dependencies = 
+  dependencies_df %>% 
+  semi_join(na_depmap, by = "DepMap_ID")
+```
+
+Pivot longer & create a new column for entrez ID 
+```{r}
+long_dependencies = 
+  filt_dependencies %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "DEPENDENCY" )
+
+long_dependencies = 
+  long_dependencies %>%
+    separate(col = "SYMBOL", into = c("SYMBOL", "ENTREZ"), sep = "\\s") 
+   
+long_dependencies$ENTREZ <- gsub("\\(|\\)","",as.character(long_dependencies$ENTREZ))
+```
+
+Find the dependency for the specific gene
+```{r}
+long_dependencies =
+  long_dependencies %>% 
+  select(-ENTREZ)
+
+pred_symbol_depmap = 
+  predicted_na %>% 
+  select(DepMap_ID.y, SYMBOL) %>% 
+  distinct() %>% 
+  rename("DepMap_ID" = "DepMap_ID.y")
+
+filt_long_dependencies =
+  long_dependencies %>% 
+  semi_join(pred_symbol_depmap, by = c("DepMap_ID", "SYMBOL")) %>% 
+  arrange(desc(DEPENDENCY))
+
+filt_long_dependencies = 
+  filt_long_dependencies %>% 
+  left_join(lines_dis, by = "DepMap_ID")
+```
+
+Save dependency dataframe
+```{r}
+saveRDS(filt_long_dependencies, file = "../spliceai/Dependencies_offTarget_spliceAI.rds")
+```
+
+Plot distribution of the dependencies for these genes 
+```{r}
+p = ggplot(filt_long_dependencies, aes(x = DISEASE, y = DEPENDENCY)) + 
+  geom_boxplot() + 
+  coord_flip() + 
+  theme_bw() + 
+  theme(
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL)
+```
+
+Save plot
+```{r}
+ggsave("../../../figures/results/spliceai/boxplot_offTarget_spliceAI_dependencies.png", height = 7, width = 10)
+```
+
+
+
+
+

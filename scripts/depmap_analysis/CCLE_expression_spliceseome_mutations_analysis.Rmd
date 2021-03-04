@@ -2,8 +2,9 @@
 title: "CCLE expression analysis related to spliceosomal mutations"
 author: "Leticia Castillon"
 date: "23-11-2020"
-output: html_notebook
-
+output:
+  html_document:
+    df_print: paged
 ---
 
 ```{r, message=FALSE, include=FALSE}

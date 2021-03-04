@@ -1,0 +1,62 @@
+---
+title: "Create tidyHeatmaps for pan-cancer GSA"
+output: html_notebook
+---
+## Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(EnsDb.Hsapiens.v86) # human transcript annotation data
+library(org.Hs.eg.db)
+library(gt)
+library(piano)
+library(snow)
+library(snowfall)
+library(hrbrthemes)
+library(ggrepel)
+
+select = dplyr::select
+mutate = dplyr::mutate
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+## Load precomputed GSA results
+```{r}
+gsaRes_GastvsMin = readRDS(file = "../results/GSAres/gsaRes_GastvsMin_mtb_nica.rds")
+gsaRes_AtvsMin = readRDS(file = "../results/GSAres/gsaRes_AtvsMin__mtb_nica.rds")
+gsaRes_EAvsMin = readRDS(file = "../results/GSAres/gsaRes_EAvsMin_mtb_nica.rds")
+gsaRes_MetvsMin = readRDS(file = "../results/GSAres/gsaRes_MetvsMin_mtb_nica.rds")
+```
+
+Extract matrix from GSAheatmap function
+```{r,fig.height=15,fig.width=15} 
+# Fig width and height needs to be kept at this size in order to avoid errors
+matrix_GastvsMin <- GSAheatmap(gsaRes = gsaRes_GastvsMin)
+matrix_AtvsMin <- GSAheatmap(gsaRes = gsaRes_AtvsMin)
+matrix_EAvsMin <- GSAheatmap(gsaRes = gsaRes_EAvsMin)
+matrix_MetvsMin <- GSAheatmap(gsaRes = gsaRes_MetvsMin)
+
+matrix_rank_GastvsMin = 
+  matrix_GastvsMin$rankMat %>% 
+  as_tibble(rownames = "Gene_set") %>% 
+  mutate(Comparison = "GastvsMin")
+
+matrix_rank_AtvsMin = 
+  matrix_AtvsMin$rankMat %>% 
+  as_tibble(rownames = "Gene_set") %>% 
+  mutate(Comparison = "AtvsMin")
+
+matrix_rank_EAvsMin = 
+  matrix_EAvsMin$rankMat %>% 
+  as_tibble(rownames = "Gene_set") %>% 
+  mutate(Comparison = "EAvsMin")
+
+matrix_rank_MetvsMin = 
+  matrix_MetvsMin$rankMat %>% 
+  as_tibble(rownames = "Gene_set") %>% 
+  mutate(Comparison = "MetvsMin")
+```
+
+
+

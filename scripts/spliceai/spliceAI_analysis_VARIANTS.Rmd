@@ -1,0 +1,102 @@
+---
+title: "SpliceAI analysis - Variant annotation"
+output: html_notebook
+---
+
+## Load libraries
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(data.table)
+library(pROC)
+library(PRROC)
+library(hrbrthemes)
+library(viridis)
+library(MLeval)
+select = dplyr::select
+rename = dplyr::rename
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+
+## Load parsed output
+```{r}
+##SPLICEAI PARSED OUTPUT
+data = fread("localdata/spliceai/output/spliceAI_out.csv")
+##CCLE MUTATIONS DATA
+CCLE = fread("localdata/depmap/CCLE_info")
+```
+
+## Create unique ID for each SNP 
+```{r}
+##UNIQUE VARIABLE FOR SPLICEAI OUT
+udata = data[, id_var := paste(ID, SYMBOL, POS, REF, ALT, sep = "_"), by = .(ID, SYMBOL, POS, REF, ALT)]
+
+##UNIQUE VARIABLE FOR CCLE DATA
+uccle = CCLE[, id_var := paste(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+```
+
+
+## Threshold
+Find max probability 
+```{r, warning=FALSE}
+###CREATE A NEW COLUMN WITH THE HIGHEST PROBABILITY
+
+##TURN SCORE COLUMNS INTO NUMERIC VARIABLES
+#SELECT SCORE COLUMNS
+score_col = 
+  udata %>% 
+  select(contains("SCORE")) 
+
+#SELECT COLUMN NAMES
+cols.num <- colnames(score_col)
+
+#CONVERT INTO NUMERIC
+udata = as.data.frame(udata)
+udata[cols.num] <- sapply(udata[cols.num],as.numeric)
+
+##SELECT MAX PROBABILITY FROM SPLICEAI OUTPUT
+max_data =
+  udata %>% 
+  mutate(MAX_PROBABILITY = apply(X = data[,10:13], MARGIN = 1, FUN = max)) %>% 
+  drop_na(MAX_PROBABILITY)
+```
+
+Use Variant_annotation variable instead of Variant_Classification (less levels)
+```{r}
+## CONVERT ANNOTATION INTO FACTOR AND PROBABILTY TO DOUBLE 
+alt_ann = 
+  ann_data %>% 
+  mutate(MAX_PROBABILITY = as.double(MAX_PROBABILITY)) %>% 
+  drop_na() %>% 
+  mutate(Variant_annotation = as_factor(Variant_annotation)) 
+
+#SEE ANNOTATION
+alt_ann %>% 
+  select(Variant_annotation) %>% 
+  distinct()
+
+## DATA FOR ROC
+roc_alt_data = 
+  alt_ann %>% 
+  mutate(Variants = case_when(
+    Variant_annotation == "silent" ~ 0,
+    Variant_annotation == "other conserving" ~ 1, 
+    Variant_annotation == "other non-conserving" ~ 0, 
+    Variant_annotation == "damaging" ~ 1
+  ))
+```
+
+## ROC curve
+AUC: Area Under the Curve
+```{r}
+rocobj <- roc(response = roc_alt_data$Variants, predictor = roc_alt_data$MAX_PROBABILITY, partial.auc.correct = TRUE, percent = TRUE)
+
+## PLOT 
+plot.roc(rocobj, print.auc = TRUE)
+```

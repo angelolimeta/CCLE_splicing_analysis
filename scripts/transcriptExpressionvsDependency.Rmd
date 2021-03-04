@@ -1,0 +1,127 @@
+---
+title: "Does any of the SpliceAI predicted splicing mutations have a high dependency?"
+output: html_notebook
+---
+
+Load libraries 
+```{r}
+library(tidyverse)
+library(data.table)
+```
+
+Setup
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+```
+
+Load linear model & df
+```{r}
+##DEPENDENCIES
+dependencies_df <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_dependency.csv", header = TRUE)
+
+#MUTATIONS AND METADATA
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+
+## READ SPLICEAI RESULTS
+predicted_splice <- readRDS("github/results/spliceAI/ths8.rds") 
+```
+
+From spliceAI predictions, select the off-target mutations
+```{r}
+predicted_na = 
+  predicted_splice %>% 
+  filter(is.na(DepMap_ID)) %>% 
+  select(-c("primary_disease", "Variant_Classification", "Annotation_Transcript"))
+```
+
+Annotate primary disease
+```{r}
+head(CCLE_mutations)
+
+lines_dis = 
+  CCLE_mutations %>% 
+  select(primary_disease, stripped_cell_line_name, DepMap_ID) %>% 
+  distinct() %>% 
+  rename("ID" = "stripped_cell_line_name",
+         "DISEASE" = "primary_disease")
+predicted_na = 
+  predicted_na %>% 
+  left_join(lines_dis, by = "ID") %>% 
+  as.data.table()
+```
+Create a unique ID for each SNP so that we can query the CCLE df
+```{r}
+##UNIQUE VARIABLE FOR SPLICEAI OUT
+id_na = predicted_na[, id_var := paste(ID, SYMBOL, sep = "_")]
+
+id_ccle = CCLE_mutations[, id_var := paste(stripped_cell_line_name, Hugo_Symbol, sep = "_"), by = .(stripped_cell_line_name, Hugo_Symbol)]
+```
+
+Filter CCLE using the off-target predicted mutations
+```{r}
+na_snps = 
+  semi_join(id_ccle, id_na, by = "id_var")
+```
+
+In this way we get a DepMap ID for the SNP, but keep in mind that that DepMap ID refers to other mutation in the same gene. 
+
+Extract the DepMap ID from the genes predicted by SpliceAI to suffer off target mutations
+```{r}
+depmap_id = 
+  na_snps %>% 
+  pull(DepMap_ID) %>% 
+  unique() %>% 
+  as.data.frame() 
+
+colnames(depmap_id) <- "DepMap_ID"
+```
+
+Use the DepMap ID to filter those cell lines for which dependencies have been calculated that also had predicted off target splicing
+```{r}
+filt_dependencies = 
+  dependencies_df %>% 
+  semi_join(depmap_id, by = "DepMap_ID")
+```
+
+Pivot longer & create a new column for entrez ID 
+```{r}
+long_dependencies = 
+  filt_dependencies %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "DEPENDENCY" )
+
+long_dependencies = 
+  long_dependencies %>%
+    separate(col = "SYMBOL", into = c("SYMBOL", "ENTREZ"), sep = "\\s") 
+   
+long_dependencies$ENTREZ <- gsub("\\(|\\)","",as.character(long_dependencies$ENTREZ))
+```
+
+Find the dependency for the specific gene
+```{r}
+long_dependencies =
+  long_dependencies %>% 
+  select(-ENTREZ)
+
+pred_symbol_depmap = 
+  na_snps %>% 
+  select(DepMap_ID, Hugo_Symbol) %>% 
+  distinct() %>% 
+  rename("SYMBOL" = "Hugo_Symbol")
+
+long_dependencies =
+  long_dependencies %>% 
+  semi_join(pred_symbol_depmap, by = c("DepMap_ID", "SYMBOL"))
+
+long_dependencies %>% 
+  arrange(desc(DEPENDENCY)) %>% head()
+```
+
+```{r}
+head(id_na)
+
+id_na %>% 
+  filter(SYMBOL == "SMC4")
+```
+

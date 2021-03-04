@@ -1,0 +1,249 @@
+---
+title: "Analysis of dependencies"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(readr)
+library(data.table)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+```{r}
+##DEPENDENCIES
+dependencies_df <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_dependency.csv", header = TRUE)
+
+#METADATA
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Create meta data of interest
+```{r}
+meta = 
+  sample_info %>% 
+  select(c("DepMap_ID", "stripped_cell_line_name", "primary_disease"))
+```
+
+Join tidy crispr data and join with metadata
+```{r}
+dep_meta = 
+  dependencies_df %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "GENE", values_to = "DEPENDENCY") %>% 
+  left_join(meta, by = "DepMap_ID")
+```
+
+Annotate mutations in the spliceosome
+```{r}
+dep_meta_mut = 
+  dep_meta %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            dep_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !dep_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) 
+```
+
+
+```{r}
+table(distinct(dep_meta_mut)$primary_disease,distinct(dep_meta_mut)$spliceosome_mutated)
+```
+
+## Pre-processing: quality check. 
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Bile Duct Cancer", "Leukemia","Pancreatic Cancer", "Ovarian Cancer")
+
+df_filt = 
+  dep_meta_mut %>% 
+  filter(primary_disease %in% keep) %>% 
+  drop_na()
+```
+
+Create a new column for entrez ID 
+```{r}
+df_filt = 
+  df_filt %>%
+    separate(col = "GENE", into = c("HUGO_SYMBOL", "ENTREZ"), sep = "\\s") 
+   
+df_filt$ENTREZ <- gsub("\\(|\\)","",as.character(df_filt$ENTREZ))
+```
+
+QQ plots
+```{r, warning = F}
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "top")
+  )
+
+##PLOT 
+ggplot(df_filt, aes(sample = DEPENDENCY)) + 
+  facet_wrap(facets = "primary_disease") +
+  stat_qq() + 
+  stat_qq_line() 
+```
+## Wilcoxon-test
+Estimate significance using a non-parametric method
+Prepare data for Wilcoxon 
+```{r, message=FALSE}
+df_filt %>% 
+  group_by(spliceosome_mutated) %>% 
+  summarise(
+    count = n(),
+    median = median(DEPENDENCY, na.rm = TRUE),
+    IQR = IQR(DEPENDENCY, na.rm = T),
+    std = sd(DEPENDENCY, na.rm = T)
+    )
+```
+
+Visualize data 
+```{r}
+ggboxplot(df_filt, x = "spliceosome_mutated", y = "DEPENDENCY", 
+          color = "spliceosome_mutated", palette = c("mediumvioletred","midnightblue"), 
+          ylab = "Dependency", xlab = "Defective spliceosome")
+```
+
+2 samples Wilcoxon test
+```{r}
+res <- wilcox.test(DEPENDENCY  ~ spliceosome_mutated, data = df_filt, exact = FALSE)
+
+res
+```
+
+Nest and perform wilcooxn test per gene
+```{r}
+library(broom)
+wilc_res =
+  df_filt %>% 
+  ##NEST BY CELL LINE
+  nest(-HUGO_SYMBOL) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~wilcox.test(DEPENDENCY ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+  unnest(tidied) %>% 
+  select(-c("model", "data"))
+  
+wilc_res
+```
+
+FDR 
+```{r}
+wilc_res %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr) %>% 
+  head()
+```
+
+Repeat wilcoxon test per cancer 
+```{r}
+##LIST OF CANCERS
+list_cancer = 
+  df_filt %>% 
+  pull(primary_disease) %>% 
+  unique()
+
+##EMPTY LIST TO STORE LINEAR MODELS
+lm_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    df_filt %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  lm_list[[paste0("lm.", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-HUGO_SYMBOL) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~wilcox.test(DEPENDENCY ~ spliceosome_mutated, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```
+
+Pancreatic cancer
+```{r}
+lm_list$`lm.Pancreatic Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Ovarian cancer
+```{r}
+lm_list$`lm.Ovarian Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Bone cancer
+```{r}
+lm_list$`lm.Bone Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Bile duct cancer
+```{r}
+lm_list$`lm.Bile Duct Cancer` %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Leukemia
+```{r}
+lm_list$lm.Leukemia %>% 
+  mutate(fdr=p.adjust(p.value, method = "fdr")) %>% 
+  arrange(fdr)
+```
+
+Repeat wilcoxon test per cancer 
+```{r}
+library(mblm)
+##LIST OF CANCERS
+list_cancer = 
+  df_filt %>% 
+  pull(primary_disease) %>% 
+  unique()
+
+df_filt_mb = 
+  df_filt %>% 
+  mutate(spliceosome = case_when(
+    spliceosome_mutated == "YES" ~ 1, 
+    spliceosome_mutated == "NO" ~ 0
+  ))
+
+##EMPTY LIST TO STORE LINEAR MODELS
+mb_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    df_filt_mb %>% 
+    filter(primary_disease == dis)
+  
+  ##LINEAR MODEL
+  mb_list[[paste0("mb.", dis)]] = 
+  dis_df %>% 
+  ##NEST BY CELL LINE
+  nest(-HUGO_SYMBOL) %>% 
+  #LM - DESIGN
+  mutate(model = map(data, ~mblm(DEPENDENCY ~ spliceosome, data = .))) %>% 
+  #TIDY THE MODEL
+  mutate(tidied = map(model, tidy)) %>% 
+    unnest(tidied) %>% 
+    select(-c("data", "model"))
+}
+```

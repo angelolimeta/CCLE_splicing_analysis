@@ -1,0 +1,49 @@
+---
+title: "Join transcript and gene level statistics"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+lancaster = readRDS("../github/results/differential_expression/transcripts/p_values_lancaster.rds")
+lm = readRDS("../github/results/differential_expression/transcripts/lm_res_symbols.rds") 
+```
+
+
+```{r}
+lm_spl = 
+  lm %>% 
+  filter(term == "spliceosome_mutatedYES") %>% 
+  select(Hugo_Symbol, ensembl_id, estimate, p.value) 
+
+lm_spl = 
+  lm_spl %>% 
+  rename("transcript p.value" = "p.value")
+```
+
+```{r}
+head(lm_spl)
+```
+
+```{r}
+lancaster = 
+  lancaster %>% 
+  rename("gene p.value" = "p.value")
+```
+
+```{r}
+all_statistics = 
+  lm_spl %>% 
+  left_join(lancaster, by = "Hugo_Symbol")
+
+head(all_statistics)
+```
+
+```{r}
+saveRDS(all_statistics, file = "res_lancaster/all_p_values_spliceosome.rds")
+```
+

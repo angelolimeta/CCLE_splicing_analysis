@@ -12,9 +12,11 @@ opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
 load libraries
 ```{r, message=FALSE, include=FALSE}
 library(tidyverse)
+library(ggplot2)
 library(readr)
 library(biomaRt)
 library(cowplot)
+library(RColorBrewer)
 library(ggpubr)
 library(data.table)
 library(ggsci)
@@ -67,13 +69,13 @@ plot_CCLE =
 ```
 
 Plot distribution of cancer types across cell lines
-```{r, fig.width=5, fig.height=3}
+```{r, fig.width=4, fig.height=3}
 ggplot(data=plot_CCLE) +
   geom_col(mapping = aes(x = reorder(primary_disease, freq),y = freq, fill = primary_or_metastasis)) +
   xlab(NULL) + 
   ylab(NULL) + 
   labs(fill = "Primary or Metastasis") + 
-  ggtitle("Number of primary and metastatic cancer in each cell line") +
+  ggtitle("Number of primary and metastatic cell lines per cancer") +
   theme_bw() +
   theme(axis.text.x = element_blank(), 
         axis.ticks.x = element_blank(),
@@ -83,10 +85,15 @@ ggplot(data=plot_CCLE) +
         panel.grid.minor = element_blank(),
         panel.background = element_blank(), 
         ) +
-  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 2, type = "discrete"),na.value ="black") +
+  scale_fill_manual(values = wes_palette("FantasticFox1", n = 3, type = "discrete"),na.value ="gray") +
   coord_flip() 
   #(axis.text.x = element_text(angle = 90)) +       #rotate the label
+dev.off()
  
+```
+
+```{r}
+ggsave("metvsprim.png")
 ```
 
 Repeat the plot above with counts normalized by number of cell lines studied
@@ -119,8 +126,8 @@ Show distribution of cell lines across the different cancer types (how many cell
 ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y = cell_lines_number, fill="black")) +
   geom_bar(stat = "identity", fill = "black")+ 
   xlab(NULL) + 
-  ylab("Number of cell lines studied")+ 
-  ggtitle("Number of cell lines studied per cancer") +
+  ylab(NULL)+ 
+  ggtitle("Studied cell lines per cancer") +
   geom_text(aes(label = cell_lines_number), size = 3, position = "dodge", hjust=-0.2) +
   theme_bw() +
   theme(axis.text.x = element_blank(), 
@@ -134,8 +141,11 @@ ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y 
   coord_flip() 
 ```
 
-Try to do an average of mutations (mean of mutations)
 ```{r}
+ggsave("cellLinesNumber.png", path = "figures/exploration/")
+```
+Try to do an average of mutations (mean of mutations)
+```{r, fig.height=3, fig.width=4}
 cell_lines_distribution = 
   right_join(cell_lines_distribution, normalize, by = "primary_disease", copy = TRUE)
 
@@ -161,7 +171,9 @@ ggplot(data = cell_lines_distribution, aes(x = reorder(primary_disease, normaliz
   ylab("Observed mutations normalized for cell lines studied")
 
 ```
-
+```{r}
+ggsave("normMutations.png", path = "figures/exploration/")
+```
 Retrieve database with HUGO symbol nomenclature 
 ```{r}
 #ensembl <- useMart("ensembl")
@@ -209,7 +221,7 @@ gene_length_list =
   select(hgnc_symbol, Length, Transcript) %>% 
   rename("Hugo_Symbol" = "hgnc_symbol")
 
-write_csv(gene_length_list, "../../../localdata/gene_length.csv", quote = FALSE)
+#write_csv(gene_length_list, "../../../localdata/gene_length.csv", quote = FALSE)
 ```
 
 ## Normalize for gene length
@@ -297,7 +309,6 @@ ggplot(data = top_mutations, aes(x = reorder(primary_disease, norm_mutations), y
         panel.background = element_blank())
 ```
 
-
 ## Top mutated genes across all cancers (considering only most mutated transcript)
 ```{r}
 most_mutated_genes = 
@@ -335,6 +346,100 @@ plot
 
 ```
 
+```{r}
+ggsave("mostMutatedGenes.png", path = "figures/exploration/")
+```
+
+
+
+Heatmap most mutated genes - per cancer
+Load KEGG annotation
+```{r}
+library(KEGGREST)
+
+p = keggLink("hsa", "pathway")
+map = split(names(p), unname(p))
+
+
+kegg_path =
+ getBM(filters= "hgnc_symbol", attributes= c("ensembl_gene_id","entrezgene_id","entrezgene_accession", "kegg_enzyme"), 
+       values = id_list, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+
+kegg_path
+
+entrez = 
+  CCLE_mutations %>% 
+  pull(Entrez_Gene_Id)
+
+map
+
+head(CCLE_mutations)
+```
+
+```{r}
+SOMETIMES PROBLEMS TO LOAD THIS LIBRARIES BECAUSE INCOMPATIBILITIES W/ COMPLEX HEATMAP: START NEW R SESSION
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+entrez_id = 
+  CCLE_mutations %>% 
+  select(c("Hugo_Symbol", "Entrez_Gene_Id")) %>% 
+  unique()
+
+EG = 
+  entrez_id %>% 
+  pull(Entrez_Gene_Id) %>% 
+  as.character()
+
+gene_annot = AnnotationDbi::mapIds(org.Hs.egPATH, keys=entrez_id$Entrez_Gene_Id,
+       column=c("SYMBOL"), keytype="ENTREZID") %>% 
+  as.data.frame()
+
+mget(EG, org.Hs.egPATH, ifnotfound = NA)
+```
+
+```{r}
+write.table(entrez, "localdata/entrez.txt", sep="\t", row.names = F)
+```
+
+
+```{r, fig.height=5, fig.width=7}
+library(tidyHeatmap)
+
+top_mutations_all = 
+  mutations_info %>% 
+  semi_join(most_mutated_genes, by = "Hugo_Symbol") %>% 
+  group_by(primary_disease) %>% 
+  count(Hugo_Symbol) %>% 
+  rename("number" = "n") %>% 
+  ungroup() %>% 
+  mutate(mutated = case_when(
+    number > 0 ~ 1, 
+    number <= 0 ~ 0
+  )) 
+
+top_mutations_all = 
+  top_mutations_all %>% 
+  left_join(cell_lines_distribution, by = "primary_disease") %>% 
+  select(c("primary_disease", "Hugo_Symbol", "mutated", "normalized_mutations"))
+
+
+head(top_mutations_all)
+
+gene_hm = top_mutations_all %>% 
+  group_by(Hugo_Symbol, primary_disease) %>% 
+  heatmap(Hugo_Symbol, primary_disease, mutated,
+          palette_value = circlize::colorRamp2(c(1,0), viridis::cividis(2))) %>% 
+  add_bar(normalized_mutations)
+```
+
+```{r}
+save_pdf(
+  gene_hm,
+  "figures/exploration/mostMutatedGenesHM.pdf"
+)
+```
+
 # Barplot with mutation classification
 ```{r}
 ##AVOID SCIENTIFIC NOTATION
@@ -362,4 +467,6 @@ ggplot(data = mutation_class, aes(x = reorder(Variant_Classification, Frequency)
         ) +
   coord_flip()
 ```
-
+```{r}
+ggsave("mutationClassification.png", path = "figures/exploration/")
+```
