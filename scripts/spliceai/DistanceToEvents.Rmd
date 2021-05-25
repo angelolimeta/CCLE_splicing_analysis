@@ -1,0 +1,66 @@
+---
+title: "Distance to event for SpliceAI"
+author: "Angelo Limeta"
+date: "14/4/2020"
+output:
+  html_document:
+    df_print: kable
+    toc: true
+    toc_float: true
+---
+
+# Load libraries
+```{r}
+library(tidyverse)
+library(cowplot)
+library(ggpubr)
+library(ggsci)
+library(hrbrthemes)
+library(ggrepel)
+library(ggExtra)
+select = dplyr::select
+mutate = dplyr::mutate
+```
+
+Load data
+```{r}
+df_splice =
+  readRDS("../../data/spliceAI05_Annotated.rds")
+```
+
+Pre-process
+```{r}
+df_splice = 
+  df_splice %>% 
+  pivot_longer(cols = c(POS_ACC_GAIN,POS_ACC_LOSS,POS_DONOR_GAIN,POS_DONOR_LOSS), names_to = "EVENT_TYPE", values_to = "DISTANCE") %>% 
+  mutate(DISTANCE = as.integer(DISTANCE)) %>% 
+  mutate(EVENT_TYPE = case_when(
+    EVENT_TYPE == "POS_ACC_GAIN" ~ "Acceptor gain",
+    EVENT_TYPE == "POS_ACC_LOSS" ~ "Acceptor loss",
+    EVENT_TYPE == "POS_DONOR_GAIN" ~ "Donor gain",
+    EVENT_TYPE == "POS_DONOR_LOSS" ~ "Donor loss",
+  ))
+```
+
+Plot data
+```{r}
+p_dist =
+  df_splice %>% 
+  ggplot(aes(x = DISTANCE)) +
+  geom_bar() +
+  facet_wrap(vars(EVENT_TYPE)) +
+  theme_bw() +
+  xlab("Distance to splicing event (bp)") +
+  ylab("Number of events") +
+  ggtitle("Distribution of predicted splicing events in the CCLE", subtitle = "SpliceAI confidence > 0.5") +
+  annotate("rect", xmin = -4, xmax = 4, ymin = -Inf, ymax = Inf, alpha = 0.2, fill = "red") +
+  theme(plot.title = element_text(face = "bold"))
+
+p_dist
+```
+Save plot
+```{r}
+ggsave(plot = p_dist, filename = "distance_to_event_spliceAI.pdf", width = 7, height = 4)
+```
+
+
