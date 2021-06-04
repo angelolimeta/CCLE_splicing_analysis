@@ -47,19 +47,19 @@ Sys.getenv("R_ENVIRON_USER")
 Read data: list of mutations from CCLE and list of genes that are part of the spliceosome machinery
 ```{r,  message=FALSE}
 ##SNPs
-CCLE_mutations = fread("localdata/depmap/mutations_info", header = TRUE) #mutations and sample info 
+CCLE_mutations = fread("localdata/depmap/ccle_info_21q1.csv", header = TRUE) #mutations and sample info 
 
 ##FROM HGCN, MAJOR SPLICEOSOME GENES
 splicing_major_genes_list = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-major-spliceosome.csv", header = TRUE) 
 splicing_major_genes_list = 
-splicing_major_genes_list %>% 
- rename("Hugo_Symbol" = "Approved symbol") 
+  splicing_major_genes_list %>% 
+  rename("Hugo_Symbol" = "Approved symbol") 
 
 ##FROM HGCN, MINOR SPLICEOSOME GENES
 splicing_minor_genes_list = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/group-minor-spliceosome.csv", header = TRUE) 
 splicing_minor_genes_list = 
-splicing_minor_genes_list %>% 
-   rename("Hugo_Symbol" = "Approved symbol") 
+  splicing_minor_genes_list %>% 
+  rename("Hugo_Symbol" = "Approved symbol") 
 
 ##MAKE LIST WITH ALL GENES ASSOCIATED WITH THE SPLICEOSOME
 splicing_gene_list = full_join(splicing_major_genes_list, splicing_minor_genes_list) %>% 
@@ -74,6 +74,12 @@ spliceosome_hp =
   select(Gene) %>% 
   rename("Hugo_Symbol" = "Gene")
 ```
+
+Save HGNC full list as csv 
+```{r}
+write.csv(splicing_gene_list, "localdata/spliceosome/hgnc_full_spliceosome.csv")
+```
+
 
 Gene length for normalization
 ```{r}
@@ -107,7 +113,7 @@ ncbi_id = as.vector(str_remove(ncbi_id, "ncbi-geneid:"))
 
 ## LIST OF HUGO SYMBOLS FOR GENES RELATED TO SPLICEOSOME ACCORDING TO KEGG
 genes_list = getBM(filters= "entrezgene_id", attributes= c("entrezgene_id",
-"hgnc_symbol", "description"), values = ncbi_id, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))) 
+  "hgnc_symbol", "description"), values = ncbi_id, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl"))) 
 ```
 
 ```{r, include=FALSE}
@@ -151,7 +157,6 @@ write_csv(spliceosome_mutations_ccle, "localdata/depmap/mutations_spliceosome.cs
 
 
 ## Normalization
-
 Get nr of cell lines studied per disease
 ```{r}
 ## DF WITH NUMBER OF STUDIED CELL LINES PER CANCER
@@ -179,7 +184,7 @@ spliceosome_mutations_ccle %>%
 ```
 
 Plot
-```{r, fig.height=2.5, fig.width=3}
+```{r,  fig.height=3, fig.width=4}
   ggplot(data=normalized_mutations_cancer, aes(x = reorder(DISEASE, NORMALIZED_MUTATIONS), y = NORMALIZED_MUTATIONS)) +
   geom_bar(stat = "identity", fill = "black") +
   geom_text(aes(label = sprintf("%0.2f", round(NORMALIZED_MUTATIONS, digits =2))), size = 2, position = "dodge", hjust=-0.1) +
@@ -196,6 +201,8 @@ Plot
         panel.background = element_blank(), 
         ) +
   coord_flip() 
+
+ggsave("../../../figures/exploration/CCLE_mutations_spliceosome.png", height = 7, width = 7)
 ```
 
 Normalize mutations per transcript length
@@ -225,8 +232,6 @@ normalized_mutations_gene =
 normalized_mutations_gene %>% 
   top_n(20)
 ```
-
-
 
 
 Most mutated spliceosomal genes per cancer 
@@ -515,14 +520,11 @@ formattable(summary_spliceosome_mutated_cell_lines,
 
 ```
 
-further analysis in expression data
+Further analysis in expression data
 ```{r}
 cell_lines_list_mutated %>% 
   select(DepMap_ID, spliceosome_mutated, primary_disease) %>% 
   distinct() -> spliceosome_mutated_ID
 ```
-
-
-## Intersection plot
 
 

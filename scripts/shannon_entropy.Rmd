@@ -8,6 +8,8 @@ Load libraries
 library(data.table)
 library(tidyverse)
 library(EntropyExplorer)
+library(ggbeeswarm)
+library(ggpubr)
 ```
 
 Set wd 
@@ -226,7 +228,14 @@ for (dis in list_cell_lines){
 ```
 
 ```{r}
-saveRDS(shannon_list, file = "../results/shannon_list_cell_line.rds")
+#saveRDS(shannon_list, file = "../results/shannon_list_cell_line.rds")
+```
+
+
+```{r}
+shannon_df = readRDS("shannon/res_shannonEntropy.rds")
+
+head(shannon_df)
 ```
 
 T-test
@@ -235,9 +244,92 @@ library(broom)
 shannon_yes = shannon_df$`SE(expm1)`
 shannon_no = shannon_df$`SE(expm2)`
 
-wilc_res = t.test(shannon_yes, shannon_no)
+wilc_res = wilcox.test(shannon_yes, shannon_no)
 
 tidy(wilc_res)
 ```
+Reconstruct dataframe with rownames as column
+```{r}
+names <- rownames(shannon_df)
+head(names)
+rownames(shannon_df) <- NULL
 
+shannon_df = cbind(names, shannon_df)
+#change names of columns
+colnames(shannon_df) <- c("Gene","MUT", "WT", "diff")
+
+head(shannon_df)
+
+#rename gene column
+#shannon_df = 
+ # shannon_df %>% 
+  #rename("Gene" = "names")
+```
+
+```{r}
+shannon_sep = 
+  shannon_df %>%
+    separate(col = "Gene", into = c("Gene", "ensembl_id"), sep = "\\s")
+
+shannon_sep$ensembl_id <- gsub("\\(|\\)","",as.character(shannon_sep$ensembl_id))
+```
+
+
+```{r}
+head(shannon_sep)
+#pivot longer
+
+shannon_long =
+  shannon_sep %>% 
+  pivot_longer(cols = c("WT", "MUT"), names_to = "mutated", values_to = "value") %>% 
+  select(-diff) %>% 
+  mutate(mutated = as.factor(mutated))
+
+
+head(shannon_long)
+```
+```{r}
+#Calculate the mean shannon entropy per gene for easier plotting
+shannon_mean = 
+  shannon_long %>% 
+  group_by(Gene, mutated) %>% 
+  mutate(mean_gene = mean(value)) %>% 
+  select(Gene, mutated, mean_gene) %>% 
+  distinct() %>% 
+  ungroup()
+
+#Subsample for easier plotting
+#set.seed(1337)
+#shannon_mean = sample_n(shannon_mean, 10000)
+
+
+  #mutate(mean_gene = mean(value))
+```
+
+
+```{r}
+shannon_plot <- 
+  shannon_mean %>% 
+  ggplot(aes(x = mutated, y = mean_gene, fill = mutated)) +
+  geom_violin(trim=F) +
+  #geom_beeswarm(size = 0.05, alpha = 0.4) + 
+  scale_fill_manual(values = c("WT" = "gray", "MUT" = "red")) +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  ylab("Shannon entropy") + 
+  stat_compare_means(label = "p.format", label.y = 0.87)
+
+shannon_plot
+```
+Save plot
+```{r}
+ggsave(shannon_plot, file = "../figures/results/shannon_plot.pdf")
+```
 

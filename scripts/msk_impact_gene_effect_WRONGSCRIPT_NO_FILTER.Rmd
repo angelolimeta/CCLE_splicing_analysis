@@ -1,0 +1,178 @@
+---
+title: "MSKCC-IMPACT - Gene effect"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(ggpubr)
+
+select = dplyr::select
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+```{r}
+library(readr)
+data_mutations_mskcc <- read_delim("msk-impact/msk_impact_2017/data_mutations_mskcc.txt", 
+    "\t", escape_double = FALSE, trim_ws = TRUE, 
+    skip = 1)
+
+gene_effect = fread("depmap/achilles/Achilles_gene_effect.csv")
+
+drug_rep <- fread("depmap/drug_sensitivity/repurposing_drugs_20200324.txt")
+
+ccle <- fread("depmap/CCLE_info")
+
+#load spliceAI output with intron/exon annotations
+splice_out_ann <- readRDS("spliceai/spliceAI05_Annotated.rds")
+
+```
+
+
+Clean dfs
+```{r}
+mskcc = 
+  data_mutations_mskcc %>% 
+  dplyr::select(-c("Entrez_Gene_Id", "Center")) %>% 
+  dplyr::rename("SYMBOL" = "Hugo_Symbol")
+```
+
+```{r}
+df_splice_actionable =
+  mskcc %>% 
+  dplyr::select(SYMBOL) %>% 
+  distinct() %>%
+  left_join(splice_out_ann, by = "SYMBOL") %>% 
+  distinct()
+
+#dup = duplicated(df_splice_actionable)
+#df_splice_actionable[dup,]
+
+#dup_splice = duplicated(splice_out_ann)
+#sum(dup_splice)
+
+
+
+df_splice_actionable %>% 
+  ggplot(aes(y = SYMBOL, group = SYMBOL)) +
+  geom_bar()
+
+
+df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(SYMBOL,var_per_gene) %>% 
+  distinct() %>% 
+  arrange(desc(var_per_gene))
+
+head(df_splice_actionable)
+```
+Save those variants predicted by spliceAI that are in actionable genes according to MSKCC
+```{r}
+saveRDS(df_splice_actionable, "msk-impact/spliceOut_actionable.rds")
+```
+
+Check CRISPR dep for splice vs non-splice
+```{r}
+df_crispr_actionable = 
+  df_splice_actionable %>% 
+  mutate(splice_mutation = 1,
+         splice_gene = SYMBOL) %>%
+  select(DepMap_ID,SYMBOL,primary_disease,splice_mutation,splice_gene)
+
+actionable_genes =
+  df_crispr_actionable %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  pull()
+
+#Load crispr data
+crispr = read_csv("../localdata/depmap/achilles/Achilles_gene_effect.csv")
+
+df_long_crispr = 
+  crispr %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "gene_effect") %>% 
+  mutate(SYMBOL = gsub(" .*","",SYMBOL))
+
+head(df_long_crispr)
+
+# Filter oput MSKCC IMPACT genes
+df_long_crispr_msk =
+  df_long_crispr %>% 
+  filter(SYMBOL %in% actionable_genes)
+
+df_crispr_actionable %>% 
+  full_join(df_long_crispr_msk, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(gene_effect)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),0,1)) %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  dim()
+```
+
+Filter for variants with more than 10 cell lines affected
+```{r, fig.width=7, fig.height=7}
+#select only those with alterations in more than 10 cell lines
+actionable_genes_more_10_cellines = 
+  df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  filter(var_per_gene > 10)
+
+df_long_crispr_more = 
+  df_long_crispr %>% 
+  filter(SYMBOL %in% actionable_genes_more_10_cellines$SYMBOL)
+
+df_long_crispr_more %>% 
+  select(SYMBOL) %>% 
+  unique() 
+```
+
+```{r, fig.width=7, fig.height=7}
+df_crispr_actionable %>% 
+  full_join(df_long_crispr_more, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(gene_effect)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  ggplot(aes(y = gene_effect,x = splice_mutation, color = splice_mutation)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("SYMBOL") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("CRISPR gene effect (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", aspect.ratio = 1) + 
+  stat_compare_means(label = "p.format", label.y = 6, label.x = 0.7)
+
+ggsave(filename = "../figures/results/spliceAI_out_05_actionable_geneEffect_wilcoxon.png")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -7,6 +7,9 @@ output:
     df_print: paged
 ---
 
+Description: analysis of the RNA-seq expression data classifying it based on the presence of mutations in the spliceosome vs the lack of mutations in the spliceosome. 
+
+Libraries
 ```{r, message=FALSE, include=FALSE}
 library(tidyverse)
 library(edgeR)
@@ -137,6 +140,9 @@ median_CCLE_expression %>%
   select(cell_line) %>% 
   distinct() %>% dim()
 ```
+
+
+
 Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome: 
 
 ```{r}
@@ -427,6 +433,8 @@ plotData %>%
   mutate(PC1 = as.double(PC1),
          PC2 = as.double(PC2))  -> plotData_gg
 ```
+
+
 Plot
 
 ```{r,  fig.height=4, fig.width=12}

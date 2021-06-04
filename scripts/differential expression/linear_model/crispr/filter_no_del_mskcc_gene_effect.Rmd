@@ -1,0 +1,128 @@
+---
+title: "MSKCC-IMPACT CRISPR"
+output: html_notebook
+---
+
+Filter out CCLE mutations that are deleterious 
+
+Libraries
+```{r}
+library(tidyverse)
+library(data.table)
+library(ggbeeswarm)
+library(readr)
+library(ggpubr)
+
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+#DEPMAP somatic mutations
+ccle = fread("depmap/ccle_info_21q1.csv")
+ccle = 
+  ccle %>% 
+  rename("SYMBOL" = "Hugo_Symbol")
+
+#CRISPR gene effect
+gene_effect = fread("depmap/achilles/Achilles_gene_effect.csv")
+
+#LOAD ACTIONABLE SPLICE OUTPUT (ALREADY FILTERED FOR MSK) 
+actionable_splice = readRDS("msk-impact/spliceOut_actionable.rds")
+head(actionable_splice)
+```
+
+Check CRISPR dep for splice vs non-splice
+```{r}
+df_actionable = 
+  actionable_splice %>% 
+  mutate(splice_mutation = 1,
+         splice_gene = SYMBOL) %>%
+  select(DepMap_ID,SYMBOL,primary_disease,splice_mutation,splice_gene)
+
+actionable_genes =
+  actionable_splice %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  pull()
+
+##PIVOT LONG EFFECT MATRIX
+df_long_crispr = 
+  gene_effect %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "gene_effect") %>% 
+  mutate(SYMBOL = gsub(" .*","",SYMBOL))
+
+# Filter out MSKCC IMPACT genes from gene effect df
+df_long_crispr_msk =
+  df_long_crispr %>% 
+  filter(SYMBOL %in% actionable_genes)
+
+df_actionable %>% 
+  full_join(df_long_crispr_msk, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(gene_effect)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),0,1)) %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  dim()
+```
+```{r}
+head(df_long_crispr_msk)
+```
+
+Filter out from ccle those mutations that are deleterious
+```{r}
+deleterious_ccle = 
+  ccle %>%
+  filter(isDeleterious) %>% 
+  select(SYMBOL, DepMap_ID)
+```
+
+Filter out from crispr data genes with somatic deleterious mutations detected by DepMap
+```{r}
+plot_no_deleterious = 
+  df_actionable %>% 
+  full_join(df_long_crispr, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(gene_effect)) %>% 
+  anti_join(deleterious_ccle, by = c("DepMap_ID", "SYMBOL")) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  select(-c("splice_gene", "primary_disease"))
+  
+plot_no_deleterious %>%   
+  ggplot(aes(y = gene_effect,x = splice_mutation, color = splice_mutation)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("SYMBOL") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("CRISPR gene effect (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", aspect.ratio = 1) + 
+  stat_compare_means(label = "p.format", label.y = 6, label.x = 0.7)
+
+```
+
+```{r}
+plot_no_deleterious %>% 
+  filter(SYMBOL == "TP53")
+```
+
+
+
+
+

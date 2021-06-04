@@ -1,0 +1,369 @@
+---
+title: "Kolmogorov-Smirnov test in data from CRISPr screening"
+output: html_notebook
+---
+
+Description: test statistical significance of dependencies between spliceosome-wt cell lines and spliceosome-mutated cell lines using K-S test. 
+
+Libraries 
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(readr)
+library(data.table)
+library(moderndive)
+library(gapminder)
+library(dgof)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Data
+```{r, message=FALSE}
+##GENE EFFECT
+gene_eff_df <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/achilles/Achilles_gene_effect.csv", header = TRUE) 
+
+#METADATA
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/depmap/mutations_spliceosome.csv")
+```
+
+Create meta data of interest
+```{r}
+meta = 
+  sample_info %>% 
+  select(c("DepMap_ID", "stripped_cell_line_name", "primary_disease"))
+```
+
+
+Join tidy crispr data and join with metadata
+```{r}
+gene_eff_meta = 
+  gene_eff_df %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "value") %>% 
+  left_join(meta, by = "DepMap_ID")
+
+head(gene_eff_meta)
+```
+
+Annotate mutations in the spliceosome
+```{r}
+gene_eff_mutated = 
+ gene_eff_meta %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            gene_eff_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !gene_eff_meta$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) 
+
+head(gene_eff_mutated)
+```
+```{r}
+table(distinct(gene_eff_mutated)$primary_disease,distinct(gene_eff_mutated)$spliceosome_mutated)
+```
+
+## Pre-processing
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+keep <- c("Bone Cancer", "Bile Duct Cancer", "Leukemia","Pancreatic Cancer", "Leukemia")
+
+df_filt = 
+  gene_eff_mutated %>% 
+  filter(primary_disease %in% keep) %>% 
+  drop_na()
+```
+
+Create a new column for entrez ID 
+```{r}
+df_filt = 
+  df_filt %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "entrez_id"), sep = "\\s") 
+   
+df_filt$entrez_id <- gsub("\\(|\\)","",as.character(df_filt$entrez_id))
+```
+
+```{r}
+head(df_filt)
+```
+Transform primary disease as factor
+```{r}
+df_filt = 
+  df_filt %>% 
+  mutate(primary_disease = as.factor(primary_disease))
+```
+
+Let's draw the distribution for each cancer
+```{r, fig.width=5, fig.height=5}
+ggplot(df_filt, aes(y = value, x = spliceosome_mutated, fill = spliceosome_mutated)) + 
+  geom_violin() + 
+  geom_jitter(size=0.01, position=position_jitter(0.2), alpha = 0.4) +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  facet_wrap(facets = df_filt$primary_disease) + 
+  stat_compare_means() + 
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        )
+```
+
+Kolmogorov-Smirnov test
+```{r}
+#SEPARATE THE DATAFRAME INTO TWO GROUPS
+df_no = df_filt[df_filt$spliceosome_mutated == "NO",]
+df_yes = df_filt[df_filt$spliceosome_mutated == "YES",]
+
+#WT SPLICEOSOME
+#TRASNFORM TO WIDE FORMAT (SYMBOLS AS COLUMNS)
+df_no_wide = 
+  df_no %>% 
+  pivot_wider(id_cols = DepMap_ID, names_from = Hugo_Symbol) %>% 
+  as.data.frame()
+
+#DROP NA VALUES
+df_no_wide <- drop_na(df_no_wide)
+
+#SET DEPMAP ID AS ROWNAMES
+rownames(df_no_wide) <- df_no_wide$DepMap_ID
+df_no_wide <- df_no_wide[,-1]
+
+#MUTATED SPLICEOSOME
+#TRASNFORM TO WIDE FORMAT (SYMBOLS AS COLUMNS)
+df_yes_wide = 
+  df_yes %>% 
+  pivot_wider(id_cols = DepMap_ID, names_from = Hugo_Symbol) %>% 
+  as.data.frame()
+
+#DROP NA VALUES
+df_yes_wide <- drop_na(df_yes_wide)
+
+#SET DEPMAP ID AS ROWNAMES
+rownames(df_yes_wide) <- df_yes_wide$DepMap_ID
+df_yes_wide <- df_yes_wide[,-1]
+
+
+df_ks <- data.frame(Symbol = character(18119), D = numeric(18119), p = numeric(18119), stringsAsFactors = F)
+```
+
+Loop for KS test --- pan-cancer
+```{r}
+for (j in 1:18119){  
+  k <- ks.test(df_no_wide[,j], df_yes_wide[,j], exact = T)  
+  df_ks$Symbol[j] <- names(df_no_wide)[j]
+  df_ks$D[j] <- k$statistic
+  df_ks$p[j] <- k$p.value
+}
+```
+
+```{r}
+head(df_ks)
+```
+
+FDR correction
+```{r}
+df_ks_fdr = 
+  df_ks %>%
+  mutate(FDR=p.adjust(p, method = "fdr")) %>% 
+  filter(FDR < 0.05)
+
+head(df_ks_arranged)
+```
+
+Plot 30 genes with smallest FDR value
+```{r}
+df_ks_fdr %>% 
+  slice_min(order_by = FDR,  n = 10)
+```
+
+
+
+KS test per cancer 
+```{r}
+head(df_filt)
+```
+
+```{r}
+##LIST OF CANCERS
+list_cancer = 
+  df_filt %>% 
+  pull(primary_disease) %>% 
+  unique()
+
+##EMPTY LIST TO STORE LINEAR MODELS
+lm_list <- list()
+
+for (dis in list_cancer){
+  dis_df = 
+    df_filt %>% 
+    filter(primary_disease == dis)
+  
+  #PREPARE OUTPUT DF
+  data <- data.frame(Symbol = character(18119), D = numeric(18119), p = numeric(18119), stringsAsFactors = F)
+
+  #SEPARATE THE DATAFRAME INTO TWO GROUPS
+  df_no = dis_df[dis_df$spliceosome_mutated == "NO",]
+  df_yes = dis_df[dis_df$spliceosome_mutated == "YES",]
+
+  #WT SPLICEOSOME
+  #TRASNFORM TO WIDE FORMAT (SYMBOLS AS COLUMNS)
+  df_no_wide = 
+    df_no %>% 
+    pivot_wider(id_cols = DepMap_ID, names_from = Hugo_Symbol) %>% 
+    as.data.frame()
+
+  #DROP NA VALUES
+  df_no_wide <- drop_na(df_no_wide)
+
+  #SET DEPMAP ID AS ROWNAMES
+  rownames(df_no_wide) <- df_no_wide$DepMap_ID
+  df_no_wide <- df_no_wide[,-1]
+
+  #MUTATED SPLICEOSOME
+  #TRASNFORM TO WIDE FORMAT (SYMBOLS AS COLUMNS)
+  df_yes_wide = 
+    df_yes %>% 
+    pivot_wider(id_cols = DepMap_ID, names_from = Hugo_Symbol) %>% 
+    as.data.frame()
+
+  #DROP NA VALUES
+  df_yes_wide <- drop_na(df_yes_wide)
+
+  #SET DEPMAP ID AS ROWNAMES
+  rownames(df_yes_wide) <- df_yes_wide$DepMap_ID
+  df_yes_wide <- df_yes_wide[,-1]
+
+  #KS TEST
+  for (j in 1:18119){  
+  k <- ks.test(df_no_wide[,j], df_yes_wide[,j],exact = T)  
+  data$Symbol[j] <- names(df_no_wide)[j]
+  data$D[j] <- k$statistic
+  data$p[j] <- k$p.value
+  
+  }
+  
+  #CHANGE NAME OF THE DATAFRAME TO THE DISEASE THAT THE LOOP IS CONSIDERING IN EACH ITERATION
+  assign(paste("df_ks",dis, sep = "_"), data)
+}
+```
+
+##Multiple testing correction
+Bone cancer 
+```{r}
+`df_ks_Bone Cancer` %>%
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  filter(fdr < 0.05) %>% 
+  arrange(fdr)
+```
+Pancreatic cancer
+```{r}
+`df_ks_Pancreatic Cancer` %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  filter(fdr < 0.05)
+```
+OBS. we are looking for differences in the CRISPR data, not in the expression data. Therefore differences mean that the effect of that particular gene in the cell line differed significantly based on whether or not the spliceosome presented mutations. 
+
+Leukemia 
+```{r}
+df_ks_Leukemia %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  filter(fdr < 0.05) %>% 
+  #SINCE ALL GENES SHOW THE SAME P-VALUE, GET RANDOM 30 GENES TO PLOT 
+  slice_sample(n = 30) 
+
+to_plot = 
+  df_ks_Leukemia %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  filter(fdr < 0.05) %>% 
+  #SINCE ALL GENES SHOW THE SAME P-VALUE, GET RANDOM 30 GENES TO PLOT 
+  arrange(fdr) %>% 
+  slice_head(n = 30)
+
+df_ks_Leukemia_fdr =
+  df_ks_Leukemia %>% 
+  mutate(fdr=p.adjust(p, method = "fdr"))
+
+df_ks_Leukemia_fdr %>% 
+  mutate(is_sig = fdr<0.05) %>% 
+  summarise(sig = sum(is_sig)/length(is_sig))
+
+df_ks %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  mutate(is_sig = fdr<0.05) %>%
+  summarise(sig = sum(is_sig)/length(is_sig))
+
+
+head(to_plot)
+dim(to_plot)
+```
+
+Plot genes with significant differences
+```{r, fig.height=8, fig.width=9}                                    
+symbols_to_plot = 
+  to_plot %>% 
+  select(Symbol) %>% 
+  as_vector()
+
+df_leuk_plot = 
+  df_leuk %>% 
+  #PLOT ONLY 30 GENES WITH THE SMALLEST P-VALUE
+  filter(df_leuk$Hugo_Symbol %in% symbols_to_plot) 
+  
+#change font size of wilcoxon test in plots
+font_size <- 2
+  
+#  df_leuk_plot %>%
+    
+to_plot_pan =     
+  df_ks %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  mutate(is_sig = fdr<0.05) %>% 
+  arrange(fdr) %>%  
+  top_n(n = 30) %>% 
+  select(Symbol) %>% 
+  as_vector() 
+
+df_pan_plot = 
+  df_filt %>% 
+  filter(df_filt$Hugo_Symbol %in% to_plot_pan)
+
+df_pan_plot %>% 
+  ggplot(aes(y = value, x = spliceosome_mutated, fill = spliceosome_mutated)) + 
+  geom_violin() + 
+  geom_jitter(size = 0.001, position = position_jitter(0.2), alpha = 0.4) + 
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  facet_wrap(~Hugo_Symbol) + 
+  stat_compare_means(label.y = 0.8, size = font_size) + 
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        )
+```
+
+
+Bile Duct Cancer
+```{r}
+`df_ks_Bile Duct Cancer` %>% 
+  mutate(fdr=p.adjust(p, method = "fdr")) %>% 
+  filter(fdr < 0.05)
+```
+

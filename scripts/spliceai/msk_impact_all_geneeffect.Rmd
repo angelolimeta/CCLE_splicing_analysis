@@ -1,0 +1,172 @@
+---
+title: "MSK impact gene effect"
+output: html_notebook
+---
+
+Description: list of off-target mutations (mutations in one position that modify an splice site upstream or downstream of that particular position). 
+
+Libraries
+```{r}
+library(tidyverse)
+library(data.table)
+library(readr)
+
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+#DEPMAP somatic mutations
+ccle = fread("depmap/ccle_info_21q1.csv")
+ccle = 
+  ccle %>% 
+  rename("SYMBOL" = "Hugo_Symbol")
+
+#CRISPR gene effect
+gene_effect = fread("depmap/achilles/Achilles_gene_effect.csv")
+
+#LOAD ACTIONABLE SPLICE OUTPUT (ALREADY FILTERED FOR MSK) 
+actionable_splice = readRDS("msk-impact/spliceOut_actionable.rds")
+head(actionable_splice)
+```
+
+Pivot longer gene effect 
+```{r}
+df_long_crispr = 
+  gene_effect %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "gene_effect") %>% 
+  mutate(SYMBOL = gsub(" .*","",SYMBOL))
+```
+
+
+```{r}
+ccle = 
+  ccle %>% 
+  select(-V1)
+
+head(ccle)
+
+ccle_join = 
+  ccle %>%  
+  select(SYMBOL, DepMap_ID, Variant_Type, isDeleterious)
+```
+Join gene effect with metadata
+```{r}
+df_full = 
+  full_join(df_long_crispr, ccle_join, by = c("SYMBOL", "DepMap_ID")) %>% 
+  filter(!is.na(gene_effect)) %>% 
+  distinct()
+
+# Some of the genes do not have mutations - substitute NA for WT information
+df_full = 
+  df_full %>% 
+  mutate(Variant_Type = ifelse(is.na(Variant_Type), "WT", Variant_Type),
+         isDeleterious = ifelse(is.na(isDeleterious), F, isDeleterious))
+
+
+head(df_full)
+```
+Filter only those genes in MSK 
+```{r}
+# List of actionable genes
+act_list = 
+  actionable_splice %>% 
+  select(SYMBOL) 
+
+act_depmap = 
+  actionable_splice %>% 
+  select(DepMap_ID, SYMBOL)
+
+# Get gene effect of the variants that cause splicing 
+df_full_act = 
+  df_full %>% 
+  inner_join(act_list, by = "SYMBOL") %>% 
+  distinct()
+
+
+head(df_full_act)
+
+# Use SpliceAI output to select those mutations+cell lines predicted to be splice mutating by SpliceAI
+df_labelled = 
+  df_full_act %>%
+  inner_join(act_depmap, by = c("SYMBOL", "DepMap_ID")) %>% 
+  mutate(spliceAI = T)
+```
+Join back with rest of gene effect info
+```{r}
+# Join with rest of data
+df_all = 
+  df_labelled %>% 
+  full_join(df_full_act) %>% 
+  distinct()
+
+# SpliceAI false for those that were not predicted 
+df_all = 
+  df_all %>% 
+  mutate(spliceAI = ifelse(is.na(spliceAI), F, spliceAI))
+```
+
+Calculate proportions of spliceAI predicted mutations and rest 
+```{r}
+head(df_all)
+
+table(df_all$spliceAI)
+
+#0.2% of events are SpliceAI positive 
+```
+
+```{r}
+library(purrr)
+library(ggpubr)
+library(ggstatsplot)
+#Try subsampling for easier plotting
+set.seed(1337)
+
+nested_df <- df_all %>% 
+  group_by(spliceAI) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  #select from True and False to keep the proportion from the large df 
+  mutate(n = c(677, 20000))
+
+
+sampled_df <- nested_df %>%
+  mutate(samp = map2(data, n, sample_n))
+
+small_df = 
+  sampled_df %>% 
+  select(-c(data, n)) %>% 
+  unnest()
+```
+
+
+```{r}
+small_df %>%  
+  ggbetweenstats(
+    x = spliceAI, 
+    y = gene_effect, 
+    p.adjust.method = "bonferroni",
+    #scale_fill_manual(values = c("gray", "red")),   
+    xlab = "Predicted alteration by SpliceAI", 
+    ylab = "Gene effect",
+    title = "Comparison of gene effect between genes predicted as splice-altered by SpliceAI and the rest"
+  )
+```
+```{r}
+ggsave("/Users/castilln/Desktop/thesis/figures/msk_spliceAI_gene_effect.png", width=9)
+```

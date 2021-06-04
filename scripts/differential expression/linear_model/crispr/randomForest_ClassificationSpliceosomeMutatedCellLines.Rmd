@@ -28,6 +28,9 @@ mutations_spliceosome = fread("depmap/mutations_spliceosome.csv")
 #DEPENDENCY DATA
 dep_df = fread("depmap/achilles/Achilles_gene_dependency.csv")
 
+#GENE EFFECT
+effect = fread("depmap/achilles/Achilles_gene_effect.csv")
+
 #CCLE SNP data
 ccle = fread("depmap/CCLE_info")
 ```
@@ -41,7 +44,7 @@ cancer_list =
 
 
 ann_df = 
-  dep_df %>% 
+  effect %>% 
   left_join(cancer_list, by = "DepMap_ID")
 ```
 
@@ -75,13 +78,14 @@ Random forest - do not run using formula; make sure response variable y is trans
 ```{r}
 train_x = 
   pretrain_df %>%  
-  select(-spliceosome_mutated)
+  select(-c(spliceosome_mutated, DepMap_ID))
 
 train_y = 
   factor(pretrain_df$spliceosome_mutated)
 
+#CHECK NUMBER OF TREES
 dep.rf = 
-  randomForest(train_x, train_y, importance = TRUE, proximity = TRUE)
+  randomForest(train_x, train_y, importance = TRUE, proximity = TRUE, ntree = 1000)
 ```
 
 Plot importance of predictor variables
@@ -92,4 +96,19 @@ varImpPlot(dep.rf)
 ```{r}
 print(dep.rf)
 print(importance(dep.rf, type=2))
+```
+
+Train random forest with 10000 trees 
+```{r}
+dep.rf_10000 = 
+  randomForest(train_x, train_y, importance = TRUE, proximity = TRUE, ntree = 10000)
+```
+
+```{r, fig.height=7}
+varImpPlot(dep.rf_10000)
+```
+
+```{r}
+print(dep.rf_10000)
+print(importance(dep.rf_10000, type=2))
 ```

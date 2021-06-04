@@ -109,21 +109,25 @@ cell_lines_studied =
 normalize = 
   cell_lines_studied %>% 
   count(primary_disease) %>%
-  rename("cell_lines_number" = "n") 
+  rename("cell_lines_number" = "n") %>% 
+  drop_na(primary_disease)
+
 
 ## MUTATIONS ACROSS ALL CELL LINES
 cell_lines_distribution = 
   cell_lines_studied %>% 
   count(primary_disease, wt = observed_mutations_percelline) %>% 
-  rename("observed_mutation_all_cell_lines" = "n") 
+  rename("observed_mutation_all_cell_lines" = "n")  %>% 
+  drop_na()
 
 
 ```
 
 
 Show distribution of cell lines across the different cancer types (how many cell lines have been studied per cancer)
-```{r, fig.height=3, fig.width=4}
-ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y = cell_lines_number, fill="black")) +
+```{r}
+n_cell_lines <- 
+  ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y = cell_lines_number, fill="black")) +
   geom_bar(stat = "identity", fill = "black")+ 
   xlab(NULL) + 
   ylab(NULL)+ 
@@ -139,22 +143,26 @@ ggplot(data = normalize, aes(x = reorder(primary_disease, cell_lines_number), y 
         panel.background = element_blank(), 
         ) +
   coord_flip() 
+
+n_cell_lines
 ```
 
 ```{r}
 ggsave("cellLinesNumber.png", path = "figures/exploration/")
 ```
 Try to do an average of mutations (mean of mutations)
-```{r, fig.height=3, fig.width=4}
+```{r}
 cell_lines_distribution = 
   right_join(cell_lines_distribution, normalize, by = "primary_disease", copy = TRUE)
 
 cell_lines_distribution = 
   cell_lines_distribution %>% 
   mutate(normalized_mutations = observed_mutation_all_cell_lines / cell_lines_number) %>% 
-  arrange(normalized_mutations)
+  arrange(normalized_mutations) %>% 
+  drop_na(primary_disease)
 
-ggplot(data = cell_lines_distribution, aes(x = reorder(primary_disease, normalized_mutations), y = normalized_mutations)) +
+n_mutations_general <- 
+  ggplot(data = cell_lines_distribution, aes(x = reorder(primary_disease, normalized_mutations), y = normalized_mutations)) +
   geom_col(fill = "black") +
   geom_text(aes(label = sprintf("%0.0f", round(normalized_mutations, digits =0))), size = 2.5, position = "dodge", hjust=-0.05) +
   theme_bw() +
@@ -168,12 +176,25 @@ ggplot(data = cell_lines_distribution, aes(x = reorder(primary_disease, normaliz
         ) +
   coord_flip() + 
   xlab(NULL) + 
-  ylab("Observed mutations normalized for cell lines studied")
+  ylab(NULL) +
+ ggtitle("Somatic mutations per cancer") 
 
+
+n_mutations_general
 ```
+
 ```{r}
 ggsave("normMutations.png", path = "figures/exploration/")
 ```
+
+```{r}
+exp_cell_lines_and_mutations <- ggarrange(n_mutations_general, n_cell_lines, nrow =2)
+
+
+ggsave(exp_cell_lines_and_mutations, path = "/Users/castilln/Desktop/thesis/figures/exploration/", device = "png", height = 10)
+```
+
+
 Retrieve database with HUGO symbol nomenclature 
 ```{r}
 #ensembl <- useMart("ensembl")
@@ -377,7 +398,7 @@ head(CCLE_mutations)
 ```
 
 ```{r}
-SOMETIMES PROBLEMS TO LOAD THIS LIBRARIES BECAUSE INCOMPATIBILITIES W/ COMPLEX HEATMAP: START NEW R SESSION
+#SOMETIMES PROBLEMS TO LOAD THIS LIBRARIES BECAUSE INCOMPATIBILITIES W/ COMPLEX HEATMAP: START NEW R SESSION
 library("AnnotationDbi")
 library("org.Hs.eg.db")
 
@@ -468,5 +489,5 @@ ggplot(data = mutation_class, aes(x = reorder(Variant_Classification, Frequency)
   coord_flip()
 ```
 ```{r}
-ggsave("mutationClassification.png", path = "figures/exploration/")
+ggsave("../../../figures/exploration/CCLE_mutationClassification.png")
 ```

@@ -7,6 +7,7 @@ output: html_notebook
 library(tidyverse)
 library(data.table)
 library(randomForest)
+library(randomForestExplainer)
 ```
 
 Set wd 
@@ -119,13 +120,20 @@ dep.rf =
   randomForest(train_x, train_y, importance = TRUE, proximity = TRUE)
 ```
 
+
+# Random Forest Explainer
+```{r}
+explain_forest(dep.rf, interactions = TRUE, data = pretrain_df)
+```
+
+
 Plot importance of predictor variables
 ```{r, fig.height=7}
-varImpPlot(dep.rf)
+varImpPlot(dep.rf, sort=T)
 ```
 
 ```{r}
 print(dep.rf)
-print(importance(dep.rf, type=2))
+print(importance(dep.rf, type=1))
 ```
 

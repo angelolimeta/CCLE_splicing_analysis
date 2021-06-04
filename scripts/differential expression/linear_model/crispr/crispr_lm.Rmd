@@ -3,6 +3,8 @@ title: "Linear model on dependencies - pan cancer and per cancer"
 output: html_notebook
 ---
 
+Description: 
+
 Load libraries
 ```{r}
 library(tidyverse)
@@ -75,6 +77,7 @@ gene_eff_mutated =
 ```{r}
 table(distinct(gene_eff_mutated)$primary_disease,distinct(gene_eff_mutated)$spliceosome_mutated)
 ```
+
 ## Pre-processing: quality check. 
 Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
 ```{r}
@@ -85,7 +88,6 @@ df_filt =
   filter(primary_disease %in% keep) %>% 
   drop_na()
 ```
-
 Create a new column for entrez ID 
 ```{r}
 df_filt = 
@@ -202,7 +204,6 @@ wilc_res =
   
 wilc_res
 ```
-
 FDR - set lower threshold?
 ```{r}
 wilc_res %>% 

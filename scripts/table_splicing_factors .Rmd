@@ -1,0 +1,174 @@
+---
+title: "Splicing factor tables"
+output: html_notebook
+---
+
+```{r}
+library(kableExtra)
+library(tidyverse)
+library(readxl)
+library(ggstatsplot)
+library(formattable)
+library(sparkline)
+library(data.table)
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+no_core_factors = fread("spliceosome/tcga_non_core_spliceosome_CCLE_mutations.csv")
+core_factors = fread("spliceosome/tcga_core_spliceosome_CCLE_mutations.csv")
+other_factors = fread("spliceosome/tcga_other_spliceosome_CCLE_mutations.csv")
+
+head(no_core_factors)
+```
+
+
+```{r}
+no_core_list = 
+  no_core_factors %>% 
+  pull(Hugo_Symbol)
+
+core_list = 
+  core_factors %>% 
+  pull(Hugo_Symbol)
+
+other_list = 
+  other_factors %>% 
+  pull(Hugo_Symbol)
+```
+
+Generate dataframe with the information that we want to show on the table
+```{r}
+table_df = 
+  CCLE_mutations %>% 
+  select(DepMap_ID, Hugo_Symbol, primary_disease, Variant_Classification) %>% 
+  mutate(spliceosome = case_when(
+    Hugo_Symbol %in% no_core_list ~ "no_core", 
+    Hugo_Symbol %in% core_list ~ "core", 
+    Hugo_Symbol %in% other_list ~ "other"
+  ))  %>% 
+  filter(!is.na(spliceosome)) %>% 
+  distinct() %>% 
+  filter(Variant_Classification != "Silent")
+```
+
+
+```{r}
+table = 
+  table_df %>% 
+  group_by(spliceosome) %>% 
+  add_count(Hugo_Symbol, name = "number of mutations") %>% 
+  ungroup() %>% 
+  group_by(Hugo_Symbol, primary_disease) %>%
+  add_count(name = "events in cancer") %>% 
+  ungroup() %>% 
+  group_by(Hugo_Symbol, Variant_Classification) %>% 
+  add_count(name = "variant") %>% 
+  ungroup() 
+
+n_mutations_list <- split(table$`number of mutations`, table$Hugo_Symbol)
+
+```
+
+```{r}
+df = 
+  table_df %>% 
+  select(-c("DepMap_ID", "Variant_Classification", "primary_disease")) %>%
+  group_by(spliceosome) %>%
+  add_count(Hugo_Symbol, name = "Mutation events") %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  arrange(desc(`Mutation events`)) %>% 
+  rename("Symbol" = "Hugo_Symbol", 
+         "Splicing factor" = "spliceosome") %>% 
+  mutate(`Splicing factor`  = as.factor(`Splicing factor`)) %>% 
+  mutate(`Mutation events` = formattable::color_bar("lightgreen")(`Mutation events`))
+
+df$`Splicing factor` = cell_spec(
+ df$`Splicing factor`, color = "white", background = factor(df$`Splicing factor`, c("no_core", "core", "other"), c("darkred","purple","blue")))
+
+#format 
+#df$`Mutation events` = color_bar("light_green")(df$`Mutation events`)
+
+#produce table
+ splicing_factors_table = 
+  kbl(df, format ="latex", escape = F) %>% 
+  kable_classic("striped") %>%  
+    column_spec(1, width = "2.5cm") %>% 
+    column_spec(2, width = "2cm") %>% 
+    column_spec(3, width = "7cm") %>% 
+    #column_spec(4, image = spec_boxplot(n_mutations_list)) %>% 
+  scroll_box()
+
+splicing_factors_table  
+
+```
+
+Generate normal table
+```{r}
+# Generate table to wrap in xtable and feed to latex 
+df = 
+  table_df %>% 
+  select(-c("DepMap_ID", "Variant_Classification", "primary_disease")) %>%
+  group_by(spliceosome) %>%
+  add_count(Hugo_Symbol, name = "Mutation events") %>% 
+  distinct() %>% 
+  ungroup() %>% 
+  arrange(desc(`Mutation events`)) %>% 
+  rename("Symbol" = "Hugo_Symbol", 
+         "Splicing factor" = "spliceosome") %>% 
+  mutate(`Splicing factor`  = as.factor(`Splicing factor`)) 
+
+
+# Get gene description
+library(biomaRt)
+# Extract HGNC ids
+filt_symbol = 
+  df %>% 
+  pull(Symbol)
+
+genes_list =
+ getBM(filters= "hgnc_symbol", attributes= c("hgnc_symbol", "description"), 
+       values = filt_symbol, uniqueRows = TRUE, mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+
+genes_list$description <- gsub("\\[.*?\\]"," ",as.character(genes_list$description))
+
+head(genes_list)
+
+genes_list = 
+  genes_list %>% 
+  rename("Symbol" = "hgnc_symbol",
+         "Description" = "description")
+df = 
+  df %>% 
+  left_join(genes_list, by = "Symbol") 
+
+df = 
+  df %>% 
+  relocate(Description, .before = `Splicing factor`)
+
+df = as_data_frame(df)
+
+```
+
+```{r}
+library(xtable)
+print(xtable(df, floating=FALSE, latex.environments=NULL), include.rownames = F)
+```

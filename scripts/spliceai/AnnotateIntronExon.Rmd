@@ -1,0 +1,266 @@
+---
+title: "Annotate variant in exon/intron"
+output: html_notebook
+---
+
+Load libraries
+```{r}
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(GenomicRanges)
+library(readr)
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+```{r}
+##LOAD SOMATIC MUTATIONS
+ccle <- fread("depmap/CCLE_mutations_21q1.csv")
+meta <- fread("depmap/sample_info.csv")
+
+ccle = 
+  ccle %>% 
+  left_join(meta, by = "DepMap_ID")
+
+##OBS THIS IS THE OUTPUT FILTERED FOR THOSE CLASSIFIED AS SPLICED_ALTERED VARIANT > 0.5 PROBABILITY
+splice_out = readRDS("../github/results/spliceAI/ths5.rds")
+```
+
+##FIND OUT EXON LOCATIONS FOR EACH TRANSCRIPT
+```{r}
+#RETRIEVE TRANSCRIPT LIST A DF
+transcript = 
+  ccle %>% 
+  pull(Annotation_Transcript) %>% 
+  as.data.frame() %>% 
+  unique()
+
+##REMOVE VERSION AFTER TRANSCRIPT ID
+transcript_sub <- map_df(transcript, ~ gsub("\\..*", "", .x)) 
+
+transcript_list <- as.list(transcript_sub)
+```
+
+Use biomart to get exon position
+```{r}
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") 
+
+attributes.1 = c("exon_chrom_start", "exon_chrom_end", "transcript_length", "ensembl_gene_id","ensembl_transcript_id","ensembl_exon_id", "chromosome_name", "strand")
+
+transcript_data<-getBM(attributes.1, filters = c('ensembl_transcript_id'), values=transcript_list, mart=ensembl)
+```
+
+Change variable name for transcript id
+```{r}
+transcript_data = 
+  transcript_data %>% 
+  rename("Transcript_ID" = "ensembl_transcript_id")
+```
+
+
+#Find those variations of spliceAI that may generate new splicing sites
+Create new matrix only containing positions with probability > 0.5 of generating a new acceptor position
+```{r}
+max_acc = 
+  splice_out %>% 
+  select(-"MAX_PROBABILITY") %>% 
+  filter(SCORE_ACC_GAIN > 0.5) 
+
+max_acc$POS_ACC_GAIN <- as.numeric(max_acc$POS_ACC_GAIN)
+
+
+head(max_acc)
+```
+
+Generate new position in the bp where mutation occurs
+```{r}
+max_acc_mut = 
+  max_acc %>% 
+  mutate(MUT_POS = POS + POS_ACC_GAIN)
+
+head(max_acc_mut)
+```
+
+Create new matrix only containing positions with probability > 0.5 of generating a new donor position
+```{r}
+max_don = 
+  splice_out %>% 
+  select(-"MAX_PROBABILITY") %>% 
+  filter(SCORE_DONOR_GAIN > 0.5) 
+
+max_don$POS_DONOR_GAIN <- as.numeric(max_don$POS_DONOR_GAIN)
+
+
+head(max_don)
+```
+
+Generate new position in the bp where mutation occurs
+```{r}
+max_don_mut = 
+  max_don %>% 
+  mutate(MUT_POS = POS + POS_DONOR_GAIN)
+
+head(max_don_mut)
+```
+
+Merge both data frames 
+```{r}
+max_mut <- rbind(max_acc_mut, max_don_mut)
+
+head(max_mut)
+```
+
+CAREFULT THAT WE ARE NOT CONSIDERING MUTATIONS THAT OCCUR ONLY BECAUSE OF LOSS OF SPLICING
+
+Add Hugo Symbol to transcript and exon length data
+```{r}
+##REMOVE VERSION AFTER TRANSCRIPT ID
+ccle$Annotation_Transcript <- gsub("\\..*", "", ccle$Annotation_Transcript)
+
+ccle_ann = 
+  ccle %>% 
+  select(c("Hugo_Symbol", "Annotation_Transcript")) %>% 
+  rename("SYMBOL" = "Hugo_Symbol", 
+                "Transcript_ID" = "Annotation_Transcript")
+
+
+##JOIN SYMBOL TO TRANSCRIPT DATA
+transcript_symbol = 
+  transcript_data %>% 
+  left_join(ccle_ann, by = "Transcript_ID")
+```
+
+Genomic ranges for exon length data
+```{r}
+library(GenomicRanges)
+##GENERATE GR OBJECT FROM BIOMART DATA - GET EXON INTERVALS
+bm_intervals = GRanges(seqnames = transcript_symbol$chromosome_name, ranges = IRanges(start = transcript_symbol$exon_chrom_start, end = transcript_symbol$exon_chrom_end),
+               strand = transcript_symbol$strand)
+```
+
+Prepare spliceAI output modified for mutation position for GenomicRanges
+```{r}
+df_intervals_bm = 
+  bm_intervals %>% 
+  as.data.frame()
+```
+
+```{r}
+max_mut_ranges = 
+  max_mut %>% 
+  dplyr::rename("start_mut_pos" = "MUT_POS") %>% 
+  mutate(end_mut_pos = start_mut_pos + 1) 
+
+head(max_mut_ranges)
+```
+
+```{r}
+spliceAI_intervals  = GRanges(seqnames = max_mut_ranges$CHROM, ranges = IRanges(start = max_mut_ranges$start_mut_pos, end = max_mut_ranges$end_mut_pos),
+               strand = max_mut_ranges$Strand)
+```
+
+```{r}
+df_spliceAI_intervals = 
+  spliceAI_intervals %>% 
+  as.data.frame()
+```
+
+Find the regions that overlap using findOverlaps
+```{r}
+hits = GenomicRanges::findOverlaps(spliceAI_intervals, bm_intervals)
+
+table(!is.na(findOverlaps(spliceAI_intervals, bm_intervals, select = "arbitrary")))
+```
+
+Define indexes for each query
+```{r}
+# SpliceAI defined splice sites
+df_intervals_spliceAI =
+  spliceAI_intervals@ranges %>% 
+  as.data.frame()
+
+df_intervals_spliceAI =
+  df_intervals_spliceAI %>% 
+  mutate(index_spliceAI = 1:nrow(df_intervals_spliceAI)) %>% 
+  dplyr::rename("splice_start" = "start",
+                "splice_end" = "end")
+
+# Exons
+df_intervals_exons =
+  bm_intervals@ranges %>% 
+  as.data.frame()
+df_intervals_exons =
+  df_intervals_exons %>% 
+  mutate(index_exons = (1:nrow(df_intervals_exons))) %>% 
+  dplyr::rename("exon_start" = "start",
+                "exon_end" = "end")
+```
+
+Rename hits object to match query indexes
+```{r}
+df_hits =
+  hits %>% 
+  as.data.frame() %>% 
+  dplyr::rename("index_spliceAI" = "queryHits",
+                "index_exons" = "subjectHits")
+```
+
+Join both objects
+```{r}
+df_intervals_hits =
+  df_hits %>% 
+  inner_join(df_intervals_exons, by = "index_exons") %>% 
+  inner_join(df_intervals_spliceAI, by = "index_spliceAI") %>% 
+  dplyr::select(-width.y) %>% 
+  dplyr::rename("exon_length" = "width.x") %>% 
+  dplyr::select(-splice_end)
+
+head(df_intervals_hits)
+dim(df_intervals_hits)
+```
+
+Filter spliceAI with hits that fall within exons
+```{r}
+#RENAME SPLICE START POSITION TO MATCH OUTPUT FROM GRANGES
+max_mut = 
+  max_mut %>% 
+  dplyr::rename("splice_start" = "MUT_POS")
+
+#JOIN
+df_hits_spliceAI = 
+  max_mut %>% 
+  inner_join(df_intervals_hits, by = "splice_start")
+
+df_hits_spliceAI = 
+  df_hits_spliceAI %>% 
+  dplyr::select(-c("index_spliceAI", "index_exons")) %>% 
+  distinct()
+
+head(df_hits_spliceAI)
+```
+Annotate intron/exon
+```{r}
+ann_splice_out = 
+  splice_out %>% 
+  mutate(exon_intron = case_when(
+    splice_out$id_var %in% df_hits_spliceAI$id_var ~ "exon", 
+    !splice_out$id_var %in% df_hits_spliceAI$id_var ~ "intron"
+  ))
+```
+
+```{r}
+count(ann_splice_out, exon_intron)  
+```
+Save annotated output as RDS
+```{r}
+saveRDS(ann_splice_out, "spliceai/spliceAI05_Annotated.rds")
+```
+

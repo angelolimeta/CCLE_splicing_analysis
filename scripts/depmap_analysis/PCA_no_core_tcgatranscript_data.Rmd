@@ -1,0 +1,233 @@
+---
+title: "PCA on transcript data, using original TCGA non-core splicing factor list"
+output: html_notebook
+---
+
+Description: performed PCA on RNA-seq transcript data, separating the data in two groups: spliceosome mutated vs wt spliceosome using TCGA splicing factor core gene list. 
+
+Libraries
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(readr)
+library(cowplot)
+library(ggpubr)
+library(ggsci)
+library(ggrepel)
+library(ggExtra)
+library(hrbrthemes)
+library(wesanderson)
+library(data.table)
+library(Rtsne)
+library(RColorBrewer)
+library(gridExtra)
+
+
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+
+Load data
+```{r}
+#Transcription levels
+transcript_expression = read_csv("depmap/CCLE_RNAseq_transcripts.csv")
+
+mutations_spliceosome = fread("spliceosome/tcga_non_core_spliceosome_CCLE_mutations.csv")
+CCLE_mutations = fread("depmap/ccle_info_21q1.csv", header = TRUE) #mutations and sample info 
+
+```
+
+
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+Pre-process data
+```{r}
+#make sure expression data is normally distributed 
+#central limit theorem: sample size large enough to assume normal distribution
+CCLE_expression = 
+  transcript_expression %>% 
+  rename("DepMap_ID" = "X1")
+
+#join expression data with metadata
+long_CCLE_expression =
+  CCLE_expression %>%
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "TPM") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+
+
+head(long_CCLE_expression)
+
+```
+
+Prepare for tSNE/PCA
+```{r}
+##PIVOT WIDER
+df_wide = 
+  long_CCLE_expression %>% 
+  select(DepMap_ID, Gene, TPM, spliceosome_mutated, primary_disease) %>% 
+  pivot_wider(names_from = Gene, values_from = TPM) %>%  
+  as.data.frame() %>% 
+  relocate(DepMap_ID, .after = primary_disease)
+
+
+
+expression_pca <- as.matrix(df_wide[3:ncol(df_wide)])
+expression <- as.matrix(df_wide[,4:ncol(df_wide)])
+disease <- df_wide[, 2] #disease
+mutated <- df_wide[, 1]
+
+##GET RID OF NA VALUES AND SUBSTITUTE FOR MEAN EXPRESSION PER CELL LINE
+for(i in 1:ncol(expression)){
+  expression[is.na(expression[,i]), i] <- mean(expression[,i], na.rm = TRUE)
+} 
+
+#Identify colums with 0 variance and remove them from dataset - in order to be able to perform the PCA
+expression_var <- expression[ , which(apply(expression, 2, var) != 0)]
+```
+
+Run PCA
+
+```{r,  fig.height=4, fig.width=7}
+pca1 = prcomp(expression_var, center = TRUE, scale = TRUE, na.action=na.omit(expression))
+
+plotData = pca1$x[,1:2]
+plotData = cbind(DepMap_ID = expression_pca[,1], plotData)
+rownames(plotData) = NULL
+
+head(plotData)
+
+ID = plotData[,1]
+
+to_join = 
+  CCLE_mutations %>% 
+  select(DepMap_ID) %>% 
+  distinct() %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+  
+plotData %>% 
+  as_tibble() %>% 
+  left_join(to_join, by ="DepMap_ID") %>%
+  mutate(PC1 = as.double(PC1),
+         PC2 = as.double(PC2))  -> plotData_gg
+```
+
+Plot
+
+```{r,  fig.height=4, fig.width=12}
+
+ggplot(plotData_gg, aes(x = PC1,y = PC2, color = spliceosome_mutated)) +
+  geom_point(alpha = 0.5) +
+  theme(axis.text.y = element_blank(), 
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_blank(), 
+    axis.ticks.x = element_blank(),
+    legend.position = "bottom",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+  ) +
+  scale_color_manual(values = c('forestgreen', 'red2')) +
+  facet_wrap(vars(primary_disease), scales = "free") + 
+  stat_ellipse()  -> gg_transcription_mutated
+
+ggplot(plotData_gg, aes(x = PC1,y = PC2, color = primary_disease)) +
+  geom_point() +
+   theme(axis.text.y = element_blank(), 
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_blank(), 
+    axis.ticks.x = element_blank(),
+    legend.position = "right",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+  ) +
+  scale_color_manual(values = c("gainsboro", 'forestgreen', 'red2', 'orange',  'cornflowerblue', 
+                'magenta', 'darkolivegreen4',  'indianred1',  'tan4', 'darkblue', 
+                'mediumorchid1', 'firebrick4',  'yellowgreen', 'lightsalmon', 'tan3',
+                "tan1",  'darkgray','wheat4',  '#DDAD4B',  'chartreuse', 
+                 'seagreen1', 'moccasin',   'mediumvioletred', 'seagreen', 'cadetblue1',
+                "darkolivegreen1" ,"tan2" ,  "tomato3" , "#7CE3D8", "black", "yellow", "violetred", "blue")) -> gg_transcription_disease
+
+arranged_no_core <- ggarrange(gg_transcription_disease,gg_transcription_mutated, ncol = 1, nrows=2)
+# 
+ggsave(filename = arranged_no_core, device = "png", path = "../figures/exploration/", height=20, width = 10)
+```
+
+Run tSN
+```{r, fig.height=5, fig.width=5}
+set.seed(6)
+tsne_results <- Rtsne(expression, dims = 2, perplexity = 40, theta = 0.5, check_duplicates = FALSE, pca = TRUE)
+
+#plot
+
+plotData =
+  tsne_results$Y %>% 
+  as_tibble() %>% 
+  mutate(DepMap_ID = ID)
+ 
+plotData = 
+  plotData %>% 
+  left_join(to_join, by ="DepMap_ID") %>% 
+  mutate(V1 = as.double(V1),
+         V2 = as.double(V2))
+ 
+plotData %>% 
+  ggplot(aes(x = V1,y = V2, color = spliceosome_mutated)) +
+  geom_point(aes(alpha=0.5), size = 1) +
+  xlab(element_blank()) +
+  ylab(element_blank()) +
+  facet_wrap(vars(primary_disease)) +
+  theme_bw() +
+  ggtitle("tSNE") +
+  theme(legend.position = "bottom",
+        aspect.ratio = 1,
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = c('forestgreen', 'red2')) ->tsne_expression
+
+ggsave("/Users/castilln/Desktop/thesis/figures/exploration/no_core_tcga_tsne_expression.png", device = "png", width = 23, height = 22, units = "cm", dpi = "retina")
+
+print(tsne_expression)
+```

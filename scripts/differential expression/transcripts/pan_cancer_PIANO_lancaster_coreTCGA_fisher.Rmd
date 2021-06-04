@@ -1,0 +1,118 @@
+---
+title: "PIANO using lancaster aggregated p-values"
+output: html_notebook
+---
+
+# Load libraries
+```{r}
+library(tidyverse)
+library(piano)
+library(edgeR)
+```
+
+Set wd
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/")
+```
+
+Load aggregated p-values
+```{r}
+lanc_p_values = readRDS("localdata/res_lancaster/core_tcga_p_values_lancaster.rds")
+
+head(lanc_p_values)
+```
+
+Load gene sets 
+```{r}
+kegg_gsc = loadGSC(file="localdata/gene_sets/c2.cp.kegg.v7.2.symbols.gmt")
+hallmarks_gsc = loadGSC(file="localdata/gene_sets/h.all.v7.2.symbols.gmt")
+humanGEM_mets = loadGSC(file= "localdata/gene_sets/HumanGEM_v1.5.0_symbols_metabolites.gmt")
+humanGEM_subs = loadGSC(file= "localdata/gene_sets/HumanGEM_v1.5.0_symbols_subsystems.gmt")
+```
+
+# Comp. YesvsNo
+Prepare p-values to be used by piano
+```{r}
+p_val =
+  lanc_p_values %>%
+  pull(p.value)
+
+names(p_val) =
+  lanc_p_values %>% 
+  pull(Hugo_Symbol)
+```
+
+Run PIANO
+For kegg gs.
+```{r}
+library(snowfall)
+gsa_adj_kegg <- runGSA(geneLevelStats = p_val, 
+                  gsc = kegg_gsc,
+                  ncpus=8, 
+                  geneSetStat = "fisher",
+                  signifMethod = "geneSampling",
+                  adjMethod = "fdr",
+                  nPerm = 10000)
+
+gsa_adj_kegg
+```
+
+```{r, include=FALSE}
+GSAsummaryTable(gsaRes = gsa_adj_kegg, save=T, file = "localdata/resultsGSA/core_tcga_kegg_gsa_results_fisher.csv")
+```
+
+Hallmarks gene set
+```{r}
+library(snowfall)
+gsa_adj_hallmarks <- runGSA(geneLevelStats = p_val, 
+                  gsc = hallmarks_gsc,
+                  ncpus=8, 
+                  geneSetStat = "fisher",
+                  signifMethod = "geneSampling",
+                  adjMethod = "fdr",
+                  nPerm = 10000)
+
+gsa_adj_hallmarks
+```
+
+```{r, include=FALSE}
+GSAsummaryTable(gsaRes = gsa_adj_hallmarks, save=T, file = "localdata/resultsGSA/core_tcga_hallmarks_gsa_results_fisher.csv")
+```
+
+# Human GEM gene set 
+Metabolites
+```{r}
+library(snowfall)
+gsa_adj_mets <- runGSA(geneLevelStats = p_val, 
+                  gsc = humanGEM_mets,
+                  ncpus=8, 
+                  geneSetStat = "fisher",
+                  signifMethod = "geneSampling",
+                  adjMethod = "fdr",
+                  nPerm = 10000)
+
+gsa_adj_mets
+```
+
+```{r}
+GSAsummaryTable(gsaRes = gsa_adj_mets, save=T, file = "localdata/resultsGSA/core_tcga_mets_gsa_results_fisher.csv")
+```
+
+Subsystems
+```{r}
+library(snowfall)
+gsa_adj_subs <- runGSA(geneLevelStats = p_val, 
+                  gsc = humanGEM_subs,
+                  ncpus=8, 
+                  geneSetStat = "fisher",
+                  signifMethod = "geneSampling",
+                  adjMethod = "fdr",
+                  nPerm = 10000)
+
+gsa_adj_subs
+```
+
+```{r}
+GSAsummaryTable(gsaRes =  gsa_adj_subs, save=T, file = "localdata/resultsGSA/core_tcga_subs_gsa_results_fisher.csv")
+```

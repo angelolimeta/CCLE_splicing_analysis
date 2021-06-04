@@ -1,0 +1,242 @@
+---
+title: "Drug sensitivity depending on presence of splice altering variants according to SpliceAI predicitons"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(ggbeeswarm)
+library(ggpubr)
+
+rename = dplyr::rename
+select = dplyr::select
+```
+set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load offtarget splice variations
+```{r}
+splice_out = readRDS("spliceai/spliceAI05_Annotated.rds")
+#Drug data 
+drugs = fread("depmap/drug_sensitivity/primary-screen-replicate-collapsed-logfold-change.csv")
+drugs = drugs %>% 
+  rename("DepMap_ID" = "V1")
+
+meta = fread("depmap/drug_sensitivity/primary-screen-replicate-treatment-info.csv")
+
+CCLE = fread("depmap/ccle_info_21q1.csv")
+```
+
+# Join metadata with sensitivity 
+Tidy up drug data frame
+```{r}
+#pivot longer
+df_drug = 
+  drugs %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "DRUG", values_to = "SENSITIVITY")
+
+#separate information after "::" to new column named "DOSE"
+df_drug = 
+  df_drug %>%
+  separate(DRUG, into = c("DRUG", "DOSE"), sep = "::") %>% 
+  mutate(DOSE = as.factor(DOSE))
+
+#df_drug$DRUG = gsub("::", "", df_drug$DRUG)
+
+head(df_drug)
+```
+
+let's join with metadata
+```{r}
+df_meta = 
+  meta %>% 
+  rename("DRUG" = "broad_id",
+         "DOSE" = "dose") %>% 
+  mutate(DOSE = as.factor(DOSE))
+
+df_drug_meta = 
+  df_drug %>% 
+  left_join(df_meta, by = c("DRUG", "DOSE")) %>% 
+  distinct()
+
+head(df_drug_meta)
+
+df_drug_meta = 
+  df_drug_meta %>% 
+  select(c("DepMap_ID", "DRUG", "DOSE", "SENSITIVITY", "name", "moa", "target")) %>% 
+  rename("Hugo_Symbol" = "target") %>% 
+  distinct()
+
+head(df_drug_meta)
+
+#split into new rows those drugs that have more than one gene as target (i.e. more than one symbol in column Hugo_Symbol)
+df_drug_meta = 
+  df_drug_meta %>% 
+  mutate(Hugo_Symbol = strsplit(as.character(Hugo_Symbol), ",")) %>% 
+  unnest(Hugo_Symbol)
+```
+
+Create new column with isDeleterious information in CCLE
+We consider deleterious everything that is not a SNP
+```{r}
+df_mutations = 
+  CCLE %>% 
+  select(DepMap_ID, Hugo_Symbol, Variant_Type, isDeleterious, primary_disease)
+
+#head(df_mutations)
+
+#Create new isdel column
+df_mutations_del = 
+  df_mutations %>% 
+  select(-isDeleterious) %>% 
+  mutate(isDel = ifelse(Variant_Type == "SNP", F, T))
+
+head(df_mutations_del)
+```
+
+Join with CCLE info
+```{r}
+#join
+df_drug_mutations = 
+  df_drug_meta %>% 
+  left_join(df_mutations_del, by = c("DepMap_ID", "Hugo_Symbol")) %>% 
+  distinct()
+
+head(df_drug_mutations)
+```
+Keep only those drugs who have a gene as target 
+```{r}
+df_keep = 
+  df_drug_mutations %>% 
+  filter(!is.na(Hugo_Symbol))
+```
+
+Let's mark those cell lines with mutations that were predicted by SpliceAI to alter splicing
+```{r}
+head(splice_out)
+
+df_splice = 
+  splice_out %>% 
+  select(DepMap_ID, SYMBOL, exon_intron) %>% 
+  rename("Hugo_Symbol" = "SYMBOL") %>% 
+  mutate(splice = as.factor(TRUE))
+```
+
+```{r}
+df_splice_drug = 
+  df_keep %>% 
+  left_join(df_splice, by = c("DepMap_ID", "Hugo_Symbol")) %>% 
+  distinct()
+```
+
+Now, let's keep only the drugs that affect genes that are mutated according to CCLE
+```{r}
+only_mutated = 
+  df_splice_drug %>% 
+  filter(!is.na(Variant_Type))
+```
+
+Filter out IN/DEL mutations
+```{r}
+only_mutated = 
+  only_mutated %>% 
+  filter(isDel == F)
+```
+
+Label NA in "splice" as FALSE
+```{r}
+only_mutated = 
+  only_mutated %>% 
+  mutate(splice = ifelse(is.na(splice), FALSE, splice)) %>% 
+  mutate(splice_fac = as.factor(splice))
+
+head(only_mutated)
+```
+
+```{r}
+only_mutated %>% 
+  filter(DRUG == "BRD-K35882976-001-04-7")
+```
+Combine drug and Symbol 
+```{r}
+#put SYMBOL between parenthesis
+only_mutated$Hugo_Symbol<- gsub("$", ")", only_mutated$Hugo_Symbol)
+only_mutated[,7] <- paste0("(", format(unlist(only_mutated[,7])))
+
+head(only_mutated)
+
+combined_mutated = 
+  only_mutated %>% 
+  unite(drug_symbol, c("name", "Hugo_Symbol"), sep = " ") %>% 
+  #drop na values for sensitivity
+  drop_na(SENSITIVITY)
+```
+
+
+Plot
+```{r, fig.width=13, fig.height=10, warning=FALSE}
+
+combined_mutated %>% 
+  group_by(drug_symbol) %>% 
+  mutate(sum_splice_variants = sum(splice)) %>% 
+  ungroup() %>%
+  filter(sum_splice_variants >= 5) %>% 
+  ggplot(aes(y = SENSITIVITY, x = splice_fac, color = splice_fac)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("drug_symbol") +
+  scale_color_manual(labels = c("WT", "splice"), values = c("darkgray","red")) +
+  xlab("") +
+  ylab("Drug sensitivity (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  stat_compare_means(label = "p.format", label.y = -6, label.x = 1, size = 2.5)
+
+ggsave("../../../figures/results/spliceai/drugSensitivity/spliceAI_out_drugSensitivity_filteroutINDELS_DRUG_SYMBOL.png", height = 10, width = 10)
+```
+
+Generate plot facetin per cancer
+```{r, warning=F, fig.height=7, fig.width=8}
+only_mutated %>% 
+  group_by(Hugo_Symbol) %>% 
+  mutate(sum_splice_variants = sum(splice)) %>% 
+  ungroup() %>%
+  filter(sum_splice_variants >= 7) %>% 
+  ggplot(aes(y = SENSITIVITY, x = splice_fac, color = splice_fac)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("primary_disease") +
+  scale_color_manual(labels = c("WT", "splice"), values = c("darkgray","red")) +
+  xlab("") +
+  ylab("Drug sensitivity (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        axis.ticks.x = element_blank()) + 
+  stat_compare_means(label = "p.format", label.y = -6, label.x = 1.6, size = 2.5)
+
+ggsave("../figures/results/spliceai/drugSensitivity/spliceAI_out_drugSensitivity_filteroutINDELS_DISEASE.png", height = 7, width = 8)
+```
+
+```{r, warning= F, fig.width=15, fig.height=15}
+only_mutated %>% 
+  group_by(Hugo_Symbol) %>% 
+  mutate(sum_splice_variants = sum(splice)) %>% 
+  ungroup() %>%
+  filter(sum_splice_variants >= 15) %>% 
+  ggplot(aes(y = SENSITIVITY, x = splice_fac, color = splice_fac)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("DRUG") +
+  scale_color_manual(labels = c("WT", "splice"), values = c("black","red")) +
+  xlab("") +
+  ylab("Drug sensitivity (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        axis.ticks.x = element_blank()) + 
+  stat_compare_means(label = "p.format", label.y = -6, label.x = 2, size = 2.5)
+```
+
