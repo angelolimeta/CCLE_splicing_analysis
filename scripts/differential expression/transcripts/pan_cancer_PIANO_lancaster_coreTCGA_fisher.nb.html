@@ -245,13 +245,10 @@ summary {
 <pre class="r"><code>library(tidyverse)
 library(piano)</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiUmVnaXN0ZXJlZCBTMyBtZXRob2Qgb3ZlcndyaXR0ZW4gYnkgJ3NldHMnOlxuICBtZXRob2QgICAgICAgIGZyb20gICBcbiAgcHJpbnQuZWxlbWVudCBnZ3Bsb3QyXG5SZWdpc3RlcmVkIFMzIG1ldGhvZCBvdmVyd3JpdHRlbiBieSAnaHRtbHdpZGdldHMnOlxuICBtZXRob2QgICAgICAgICAgIGZyb20gICAgICAgICBcbiAgcHJpbnQuaHRtbHdpZGdldCB0b29sczpyc3R1ZGlvXG4ifQ== -->
+<!-- rnb-output-begin eyJkYXRhIjoiUmVnaXN0ZXJlZCBTMyBtZXRob2Qgb3ZlcndyaXR0ZW4gYnkgJ3NldHMnOlxuICBtZXRob2QgICAgICAgIGZyb20gICBcbiAgcHJpbnQuZWxlbWVudCBnZ3Bsb3QyXG4ifQ== -->
 <pre><code>Registered S3 method overwritten by &#39;sets&#39;:
   method        from   
-  print.element ggplot2
-Registered S3 method overwritten by &#39;htmlwidgets&#39;:
-  method           from         
-  print.htmlwidget tools:rstudio</code></pre>
+  print.element ggplot2</code></pre>
 <!-- rnb-output-end -->
 <!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubGlicmFyeShlZGdlUilcbmBgYCJ9 -->
 <pre class="r"><code>library(edgeR)</code></pre>
@@ -264,7 +261,12 @@ Registered S3 method overwritten by &#39;htmlwidgets&#39;:
 <p>Load aggregated p-values</p>
 <!-- rnb-text-end -->
 <!-- rnb-chunk-begin -->
-<!-- rnb-frame-begin eyJtZXRhZGF0YSI6eyJjbGFzc2VzIjpbImRhdGEudGFibGUiLCJkYXRhLmZyYW1lIl0sIm5yb3ciOjYsIm5jb2wiOjIsInN1bW1hcnkiOnsiRGVzY3JpcHRpb24iOlsiZGF0YS50YWJsZVssMl0gWzYgw5cgMl0iXX19LCJyZGYiOiJINHNJQUFBQUFBQUFBd3R5aVREbWl1QmlZR0JnWm1CaFlHVmdaZ1V5R1ZoRFE5eDBMUmdZV0ppQUhFYWdCQ2VJcmdBcUVnWXlRSUlDUU13R2xXQnhkSFFNaHJKWkhSM2RIWjBRRXQ2R0NBbGZGMmVFaEc4QWdoMWtCS1Q1UUNiYXI2cVFpVXZiYVdhLzRWRFRiVVgvRHZzRGJ0T1ArZ2VWMjcrL25NZjRQczdQZm1YWnpONDlKM0xzVDl2TVVtQ2E5eGJOaVp4RitlVjZlWW01cWNWQURpL0lxUTFBNHYvLy83L1FGTEltNXlRV0YwUDlBUlBrU2trc1NkUkxLd0xxUjFjT00xTUE3SDJJSUxkSGFYcCtmSEJsYmxKK0RsU0l2VUN2TERHbkZLaWQ0UithRWV6NUJTV1orWGxBUTVoQVljaUtaamRqRVpvQWYya2V5TklVM2VTTTByeHNYVk9RKzhEU0VNQUxaYk1oc1prZ1ZyTDhoeHJGQ2pXS0xUVXZQVE12RmVhWG5NU2tWSmlEK1lBQkJ2YWJYa0ZSWmw0SkxDQ0Fvc1Y2SmZrbGlUQjFYTW41T1RBUnNOOFkvZ0VBbVEzUm96b0NBQUE9In0= -->
+<!-- rnb-source-begin eyJkYXRhIjoiYGBgclxubGFuY19wX3ZhbHVlcyA9IHJlYWRSRFMoXCJsb2NhbGRhdGEvcmVzX2xhbmNhc3Rlci9jb3JlX3RjZ2FfcF92YWx1ZXNfbGFuY2FzdGVyLnJkc1wiKVxuXG5oZWFkKGxhbmNfcF92YWx1ZXMpXG5gYGAifQ== -->
+<pre class="r"><code>lanc_p_values = readRDS(&quot;localdata/res_lancaster/core_tcga_p_values_lancaster.rds&quot;)
+
+head(lanc_p_values)</code></pre>
+<!-- rnb-source-end -->
+<!-- rnb-frame-begin eyJtZXRhZGF0YSI6eyJjbGFzc2VzIjpbImRhdGEudGFibGUiLCJkYXRhLmZyYW1lIl0sIm5yb3ciOjYsIm5jb2wiOjIsInN1bW1hcnkiOnsiRGVzY3JpcHRpb24iOlsiZGF0YS50YWJsZSBbNiDDlyAyXSJdfX0sInJkZiI6Ikg0c0lBQUFBQUFBQUF3dHlpVERtaXVCaVlHQmdabUJoWUdWZ1pnVXlHVmhEUTl4MExSZ1lXSmlBSEVhZ0JDZUlyZ0FxRWdZeVFJSUNRTXdHbFdCeGRIUU1ockpaSFIzZEhaMFFFdDZHQ0FsZkYyZUVoRzhBZ2gxa0JLVDVRQ2JhcjZxUWlVdmJhV2EvNFZEVGJVWC9EdnNEYnRPUCtnZVYyNysvbk1mNFBzN1BmbVhaek40OUozTHNUOXZNVW1DYTl4Yk5pWnhGK2VWNmVZbTVxY1ZBRGkvSXFRMUE0di8vLzcvUUZMSW01eVFXRjBQOUFSUGtTa2tzU2RSTEt3THFSMWNPTTFNQTdIMklJTGRIYVhwK2ZIQmxibEorRGxTSXZVQ3ZMREduRktpZDRSK2FFZXo1QlNXWitYbEFRNWhBWWNpS1pqZGpFWm9BZjJrZXlOSVUzZVNNMHJ4c1hWQUljWUdsSVlBWHltWkRZak5CckdUNUR6V0tGV29VVzJwZWVtWmVLc3d2T1lsSnFUQUg4d0VERE93M3ZZS2l6THdTV0VBQVJZdjFTdkpMRW1IcXVKTHpjMkFpWUw4eC9BTUFOdVU2VURvQ0FBQT0ifQ== -->
 <div data-pagedtable="false">
 <script data-pagedtable-source type="application/json">
 {"columns":[{"label":["Hugo_Symbol"],"name":[1],"type":["chr"],"align":["left"]},{"label":["p.value"],"name":[2],"type":["dbl"],"align":["right"]}],"data":[{"1":"AAAS","2":"0.05169762"},{"1":"AAGAB","2":"0.06546800"},{"1":"AAK1","2":"0.12715432"},{"1":"AAMDC","2":"0.99455929"},{"1":"AAMP","2":"0.04973297"},{"1":"AAR2","2":"0.21278693"}],"options":{"columns":{"min":{},"max":[10],"total":[2]},"rows":{"min":[10],"max":[10],"total":[6]},"pages":{}}}
@@ -343,7 +345,7 @@ Adjusting for multiple testing...done!</code></pre>
 <!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuZ3NhX2Fkal9rZWdnXG5gYGAifQ== -->
 <pre class="r"><code>gsa_adj_kegg</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMjk3MyBnZW5lcyBhbmQgMTg2IGdlbmUtc2V0c1xuICBEZXRhaWxzOlxuICBDYWxjdWxhdGluZyBnZW5lIHNldCBzdGF0aXN0aWNzIGZyb20gMjk3MyBvdXQgb2YgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzXG4gIFVzaW5nIGFsbCAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3MgZm9yIHNpZ25pZmljYW5jZSBlc3RpbWF0aW9uXG4gIFJlbW92ZWQgMjI3MiBnZW5lcyBmcm9tIEdTQyBkdWUgdG8gbGFjayBvZiBtYXRjaGluZyBnZW5lIHN0YXRpc3RpY3NcbiAgUmVtb3ZlZCAwIGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAxODYgZ2VuZSBzZXRzXG5cbkdlbmUgc3RhdGlzdGljIHR5cGU6IHAtbGlrZVxuTWV0aG9kOiBmaXNoZXJcbkdlbmUtc2V0IHN0YXRpc3RpYyBuYW1lOiBYMiBcblNpZ25pZmljYW5jZTogR2VuZSBzYW1wbGluZ1xuQWRqdXN0bWVudDogZmRyXG5HZW5lIHNldCBzaXplIGxpbWl0OiAoMSxJbmYpXG5QZXJtdXRhdGlvbnM6IDEwMDAwIFxuVG90YWwgcnVuIHRpbWU6IDAuMzcgbWluXG4ifQ== -->
+<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMjk3MyBnZW5lcyBhbmQgMTg2IGdlbmUtc2V0c1xuICBEZXRhaWxzOlxuICBDYWxjdWxhdGluZyBnZW5lIHNldCBzdGF0aXN0aWNzIGZyb20gMjk3MyBvdXQgb2YgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzXG4gIFVzaW5nIGFsbCAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3MgZm9yIHNpZ25pZmljYW5jZSBlc3RpbWF0aW9uXG4gIFJlbW92ZWQgMjI3MiBnZW5lcyBmcm9tIEdTQyBkdWUgdG8gbGFjayBvZiBtYXRjaGluZyBnZW5lIHN0YXRpc3RpY3NcbiAgUmVtb3ZlZCAwIGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAxODYgZ2VuZSBzZXRzXG5cbkdlbmUgc3RhdGlzdGljIHR5cGU6IHAtbGlrZVxuTWV0aG9kOiBmaXNoZXJcbkdlbmUtc2V0IHN0YXRpc3RpYyBuYW1lOiBYMiBcblNpZ25pZmljYW5jZTogR2VuZSBzYW1wbGluZ1xuQWRqdXN0bWVudDogZmRyXG5HZW5lIHNldCBzaXplIGxpbWl0OiAoMSxJbmYpXG5QZXJtdXRhdGlvbnM6IDEwMDAwIFxuVG90YWwgcnVuIHRpbWU6IDAuMjcgbWluXG4ifQ== -->
 <pre><code>Final gene/gene-set association: 2973 genes and 186 gene-sets
   Details:
   Calculating gene set statistics from 2973 out of 12355 gene-level statistics
@@ -360,7 +362,7 @@ Significance: Gene sampling
 Adjustment: fdr
 Gene set size limit: (1,Inf)
 Permutations: 10000 
-Total run time: 0.37 min</code></pre>
+Total run time: 0.27 min</code></pre>
 <!-- rnb-output-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
@@ -403,7 +405,7 @@ Adjusting for multiple testing...done!</code></pre>
 <!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuZ3NhX2Fkal9oYWxsbWFya3NcbmBgYCJ9 -->
 <pre class="r"><code>gsa_adj_hallmarks</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMzA2NCBnZW5lcyBhbmQgNTAgZ2VuZS1zZXRzXG4gIERldGFpbHM6XG4gIENhbGN1bGF0aW5nIGdlbmUgc2V0IHN0YXRpc3RpY3MgZnJvbSAzMDY0IG91dCBvZiAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3NcbiAgVXNpbmcgYWxsIDEyMzU1IGdlbmUtbGV2ZWwgc3RhdGlzdGljcyBmb3Igc2lnbmlmaWNhbmNlIGVzdGltYXRpb25cbiAgUmVtb3ZlZCAxMzE5IGdlbmVzIGZyb20gR1NDIGR1ZSB0byBsYWNrIG9mIG1hdGNoaW5nIGdlbmUgc3RhdGlzdGljc1xuICBSZW1vdmVkIDAgZ2VuZSBzZXRzIGNvbnRhaW5pbmcgbm8gZ2VuZXMgYWZ0ZXIgZ2VuZSByZW1vdmFsXG4gIFJlbW92ZWQgYWRkaXRpb25hbGx5IDAgZ2VuZSBzZXRzIG5vdCBtYXRjaGluZyB0aGUgc2l6ZSBsaW1pdHNcbiAgTG9hZGVkIGFkZGl0aW9uYWwgaW5mb3JtYXRpb24gZm9yIDUwIGdlbmUgc2V0c1xuXG5HZW5lIHN0YXRpc3RpYyB0eXBlOiBwLWxpa2Vcbk1ldGhvZDogZmlzaGVyXG5HZW5lLXNldCBzdGF0aXN0aWMgbmFtZTogWDIgXG5TaWduaWZpY2FuY2U6IEdlbmUgc2FtcGxpbmdcbkFkanVzdG1lbnQ6IGZkclxuR2VuZSBzZXQgc2l6ZSBsaW1pdDogKDEsSW5mKVxuUGVybXV0YXRpb25zOiAxMDAwMCBcblRvdGFsIHJ1biB0aW1lOiAwLjIzIG1pblxuIn0= -->
+<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMzA2NCBnZW5lcyBhbmQgNTAgZ2VuZS1zZXRzXG4gIERldGFpbHM6XG4gIENhbGN1bGF0aW5nIGdlbmUgc2V0IHN0YXRpc3RpY3MgZnJvbSAzMDY0IG91dCBvZiAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3NcbiAgVXNpbmcgYWxsIDEyMzU1IGdlbmUtbGV2ZWwgc3RhdGlzdGljcyBmb3Igc2lnbmlmaWNhbmNlIGVzdGltYXRpb25cbiAgUmVtb3ZlZCAxMzE5IGdlbmVzIGZyb20gR1NDIGR1ZSB0byBsYWNrIG9mIG1hdGNoaW5nIGdlbmUgc3RhdGlzdGljc1xuICBSZW1vdmVkIDAgZ2VuZSBzZXRzIGNvbnRhaW5pbmcgbm8gZ2VuZXMgYWZ0ZXIgZ2VuZSByZW1vdmFsXG4gIFJlbW92ZWQgYWRkaXRpb25hbGx5IDAgZ2VuZSBzZXRzIG5vdCBtYXRjaGluZyB0aGUgc2l6ZSBsaW1pdHNcbiAgTG9hZGVkIGFkZGl0aW9uYWwgaW5mb3JtYXRpb24gZm9yIDUwIGdlbmUgc2V0c1xuXG5HZW5lIHN0YXRpc3RpYyB0eXBlOiBwLWxpa2Vcbk1ldGhvZDogZmlzaGVyXG5HZW5lLXNldCBzdGF0aXN0aWMgbmFtZTogWDIgXG5TaWduaWZpY2FuY2U6IEdlbmUgc2FtcGxpbmdcbkFkanVzdG1lbnQ6IGZkclxuR2VuZSBzZXQgc2l6ZSBsaW1pdDogKDEsSW5mKVxuUGVybXV0YXRpb25zOiAxMDAwMCBcblRvdGFsIHJ1biB0aW1lOiAwLjE4IG1pblxuIn0= -->
 <pre><code>Final gene/gene-set association: 3064 genes and 50 gene-sets
   Details:
   Calculating gene set statistics from 3064 out of 12355 gene-level statistics
@@ -420,7 +422,7 @@ Significance: Gene sampling
 Adjustment: fdr
 Gene set size limit: (1,Inf)
 Permutations: 10000 
-Total run time: 0.23 min</code></pre>
+Total run time: 0.18 min</code></pre>
 <!-- rnb-output-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
@@ -466,7 +468,7 @@ Adjusting for multiple testing...done!</code></pre>
 <!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuZ3NhX2Fkal9tZXRzXG5gYGAifQ== -->
 <pre class="r"><code>gsa_adj_mets</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMjQwNyBnZW5lcyBhbmQgMjg3NSBnZW5lLXNldHNcbiAgRGV0YWlsczpcbiAgQ2FsY3VsYXRpbmcgZ2VuZSBzZXQgc3RhdGlzdGljcyBmcm9tIDI0MDcgb3V0IG9mIDEyMzU1IGdlbmUtbGV2ZWwgc3RhdGlzdGljc1xuICBVc2luZyBhbGwgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzIGZvciBzaWduaWZpY2FuY2UgZXN0aW1hdGlvblxuICBSZW1vdmVkIDEyMTkgZ2VuZXMgZnJvbSBHU0MgZHVlIHRvIGxhY2sgb2YgbWF0Y2hpbmcgZ2VuZSBzdGF0aXN0aWNzXG4gIFJlbW92ZWQgNzk4IGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAyODc1IGdlbmUgc2V0c1xuXG5HZW5lIHN0YXRpc3RpYyB0eXBlOiBwLWxpa2Vcbk1ldGhvZDogZmlzaGVyXG5HZW5lLXNldCBzdGF0aXN0aWMgbmFtZTogWDIgXG5TaWduaWZpY2FuY2U6IEdlbmUgc2FtcGxpbmdcbkFkanVzdG1lbnQ6IGZkclxuR2VuZSBzZXQgc2l6ZSBsaW1pdDogKDEsSW5mKVxuUGVybXV0YXRpb25zOiAxMDAwMCBcblRvdGFsIHJ1biB0aW1lOiAwLjc3IG1pblxuIn0= -->
+<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMjQwNyBnZW5lcyBhbmQgMjg3NSBnZW5lLXNldHNcbiAgRGV0YWlsczpcbiAgQ2FsY3VsYXRpbmcgZ2VuZSBzZXQgc3RhdGlzdGljcyBmcm9tIDI0MDcgb3V0IG9mIDEyMzU1IGdlbmUtbGV2ZWwgc3RhdGlzdGljc1xuICBVc2luZyBhbGwgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzIGZvciBzaWduaWZpY2FuY2UgZXN0aW1hdGlvblxuICBSZW1vdmVkIDEyMTkgZ2VuZXMgZnJvbSBHU0MgZHVlIHRvIGxhY2sgb2YgbWF0Y2hpbmcgZ2VuZSBzdGF0aXN0aWNzXG4gIFJlbW92ZWQgNzk4IGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAyODc1IGdlbmUgc2V0c1xuXG5HZW5lIHN0YXRpc3RpYyB0eXBlOiBwLWxpa2Vcbk1ldGhvZDogZmlzaGVyXG5HZW5lLXNldCBzdGF0aXN0aWMgbmFtZTogWDIgXG5TaWduaWZpY2FuY2U6IEdlbmUgc2FtcGxpbmdcbkFkanVzdG1lbnQ6IGZkclxuR2VuZSBzZXQgc2l6ZSBsaW1pdDogKDEsSW5mKVxuUGVybXV0YXRpb25zOiAxMDAwMCBcblRvdGFsIHJ1biB0aW1lOiAwLjUzIG1pblxuIn0= -->
 <pre><code>Final gene/gene-set association: 2407 genes and 2875 gene-sets
   Details:
   Calculating gene set statistics from 2407 out of 12355 gene-level statistics
@@ -483,7 +485,7 @@ Significance: Gene sampling
 Adjustment: fdr
 Gene set size limit: (1,Inf)
 Permutations: 10000 
-Total run time: 0.77 min</code></pre>
+Total run time: 0.53 min</code></pre>
 <!-- rnb-output-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->
@@ -531,7 +533,7 @@ Adjusting for multiple testing...done!</code></pre>
 <!-- rnb-source-begin eyJkYXRhIjoiYGBgclxuZ3NhX2Fkal9zdWJzXG5gYGAifQ== -->
 <pre class="r"><code>gsa_adj_subs</code></pre>
 <!-- rnb-source-end -->
-<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMTc1NiBnZW5lcyBhbmQgMTI3IGdlbmUtc2V0c1xuICBEZXRhaWxzOlxuICBDYWxjdWxhdGluZyBnZW5lIHNldCBzdGF0aXN0aWNzIGZyb20gMTc1NiBvdXQgb2YgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzXG4gIFVzaW5nIGFsbCAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3MgZm9yIHNpZ25pZmljYW5jZSBlc3RpbWF0aW9uXG4gIFJlbW92ZWQgMTA0MSBnZW5lcyBmcm9tIEdTQyBkdWUgdG8gbGFjayBvZiBtYXRjaGluZyBnZW5lIHN0YXRpc3RpY3NcbiAgUmVtb3ZlZCAzIGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAxMjcgZ2VuZSBzZXRzXG5cbkdlbmUgc3RhdGlzdGljIHR5cGU6IHAtbGlrZVxuTWV0aG9kOiBmaXNoZXJcbkdlbmUtc2V0IHN0YXRpc3RpYyBuYW1lOiBYMiBcblNpZ25pZmljYW5jZTogR2VuZSBzYW1wbGluZ1xuQWRqdXN0bWVudDogZmRyXG5HZW5lIHNldCBzaXplIGxpbWl0OiAoMSxJbmYpXG5QZXJtdXRhdGlvbnM6IDEwMDAwIFxuVG90YWwgcnVuIHRpbWU6IDAuMjggbWluXG4ifQ== -->
+<!-- rnb-output-begin eyJkYXRhIjoiRmluYWwgZ2VuZS9nZW5lLXNldCBhc3NvY2lhdGlvbjogMTc1NiBnZW5lcyBhbmQgMTI3IGdlbmUtc2V0c1xuICBEZXRhaWxzOlxuICBDYWxjdWxhdGluZyBnZW5lIHNldCBzdGF0aXN0aWNzIGZyb20gMTc1NiBvdXQgb2YgMTIzNTUgZ2VuZS1sZXZlbCBzdGF0aXN0aWNzXG4gIFVzaW5nIGFsbCAxMjM1NSBnZW5lLWxldmVsIHN0YXRpc3RpY3MgZm9yIHNpZ25pZmljYW5jZSBlc3RpbWF0aW9uXG4gIFJlbW92ZWQgMTA0MSBnZW5lcyBmcm9tIEdTQyBkdWUgdG8gbGFjayBvZiBtYXRjaGluZyBnZW5lIHN0YXRpc3RpY3NcbiAgUmVtb3ZlZCAzIGdlbmUgc2V0cyBjb250YWluaW5nIG5vIGdlbmVzIGFmdGVyIGdlbmUgcmVtb3ZhbFxuICBSZW1vdmVkIGFkZGl0aW9uYWxseSAwIGdlbmUgc2V0cyBub3QgbWF0Y2hpbmcgdGhlIHNpemUgbGltaXRzXG4gIExvYWRlZCBhZGRpdGlvbmFsIGluZm9ybWF0aW9uIGZvciAxMjcgZ2VuZSBzZXRzXG5cbkdlbmUgc3RhdGlzdGljIHR5cGU6IHAtbGlrZVxuTWV0aG9kOiBmaXNoZXJcbkdlbmUtc2V0IHN0YXRpc3RpYyBuYW1lOiBYMiBcblNpZ25pZmljYW5jZTogR2VuZSBzYW1wbGluZ1xuQWRqdXN0bWVudDogZmRyXG5HZW5lIHNldCBzaXplIGxpbWl0OiAoMSxJbmYpXG5QZXJtdXRhdGlvbnM6IDEwMDAwIFxuVG90YWwgcnVuIHRpbWU6IDAuMTggbWluXG4ifQ== -->
 <pre><code>Final gene/gene-set association: 1756 genes and 127 gene-sets
   Details:
   Calculating gene set statistics from 1756 out of 12355 gene-level statistics
@@ -548,7 +550,7 @@ Significance: Gene sampling
 Adjustment: fdr
 Gene set size limit: (1,Inf)
 Permutations: 10000 
-Total run time: 0.28 min</code></pre>
+Total run time: 0.18 min</code></pre>
 <!-- rnb-output-end -->
 <!-- rnb-chunk-end -->
 <!-- rnb-text-begin -->

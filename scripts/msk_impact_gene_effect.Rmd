@@ -154,7 +154,8 @@ df_crispr_actionable %>%
   ylab("CRISPR gene effect (sd from median)") +
   theme(axis.text.x = element_blank(),
         legend.position = "bottom", aspect.ratio = 1) + 
-  stat_compare_means(label = "p.format", label.y = 6, label.x = 0.7)
+  stat_compare_means(method='t.test',
+    label='p.format', p.adjust.method = "bonferroni", label.y = -6, label.x = 2, size = 2.5)
 
 ggsave(filename = "../figures/results/spliceAI_out_05_actionable_geneEffect_wilcoxon.png")
 ```

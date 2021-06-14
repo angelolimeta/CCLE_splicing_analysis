@@ -216,9 +216,10 @@ only_mutated %>%
   theme(axis.text.x = element_blank(),
         legend.position = "bottom", 
         axis.ticks.x = element_blank()) + 
-  stat_compare_means(label = "p.format", label.y = -6, label.x = 1.6, size = 2.5)
+  stat_compare_means(method='t.test',
+    label='p.format', p.adjust.method = "bonferroni", label.y = -6, label.x = 2, size = 2.5)
 
-ggsave("../figures/results/spliceai/drugSensitivity/spliceAI_out_drugSensitivity_filteroutINDELS_DISEASE.png", height = 7, width = 8)
+#ggsave("../figures/results/spliceai/drugSensitivity/spliceAI_out_drugSensitivity_filteroutINDELS_DISEASE.png", height = 7, width = 8)
 ```
 
 ```{r, warning= F, fig.width=15, fig.height=15}
@@ -237,6 +238,8 @@ only_mutated %>%
   theme(axis.text.x = element_blank(),
         legend.position = "bottom", 
         axis.ticks.x = element_blank()) + 
-  stat_compare_means(label = "p.format", label.y = -6, label.x = 2, size = 2.5)
+  stat_compare_means(
+    method='t.test',
+    label='p.format', p.adjust.method = "bonferroni", label.y = -6, label.x = 2, size = 2.5)
 ```
 

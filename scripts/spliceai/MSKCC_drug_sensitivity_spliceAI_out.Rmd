@@ -177,21 +177,38 @@ only_mutated =
   mutate(splice_fac = as.factor(splice)) %>% 
   drop_na(SENSITIVITY)
 
-head(only_mutated)
+#Create a replicate of Hugo_Symbol column
+
+only_mutated$SYMBOL <- only_mutated$Hugo_Symbol
+
+
+#put SYMBOL between parenthesis
+only_mutated$Hugo_Symbol<- gsub("$", ")", only_mutated$Hugo_Symbol)
+only_mutated[,7] <- paste0("(", format(unlist(only_mutated[,7])))
+
+# Get drug and symbol in one variable
+combined_mutated = 
+  only_mutated %>% 
+  unite(drug_symbol, c("name", "Hugo_Symbol"), sep = " ") %>% 
+  #drop na values for sensitivity
+  drop_na(SENSITIVITY)
+
+
+head(combined_mutated)
 ```
 
 Plot
 ```{r, fig.width=10, fig.height=10, warning=FALSE}
 
-only_mutated %>% 
-  group_by(Hugo_Symbol) %>% 
+combined_mutated %>% 
+  group_by(SYMBOL) %>% 
   mutate(sum_splice_variants = sum(splice)) %>% 
   ungroup() %>%
   filter(sum_splice_variants >= 7) %>% 
   ggplot(aes(y = SENSITIVITY, x = splice_fac, color = splice_fac)) + 
   geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
   theme_bw() +
-  facet_wrap("Hugo_Symbol") +
+  facet_wrap("drug_symbol") +
   scale_color_manual(labels = c("WT", "splice"), values = c("darkgray","red")) +
   xlab("") +
   ylab("Drug sensitivity (sd from median)") +

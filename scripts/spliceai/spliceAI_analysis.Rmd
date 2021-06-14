@@ -259,11 +259,11 @@ ggplot(data = roc_data, aes(x = splice_altering, y = MAX_PROBABILITY, fill = spl
         ) +
   scale_x_discrete(labels=c("0" = "NO", "1" = "YES")) +
   geom_hline(yintercept=0.5, linetype="dashed", color = "red") +
-  ylab("Predicted probability of being a splice altering mutation") + 
+  ylab("Probability of splice altering mutation") + 
   xlab("Splice altering") +
   stat_summary(fun.data = data_summary)
 
-ggsave("figures/results/spliceai/splice_altering_general.png", height = 4, width = 3)
+ggsave("figures/results/spliceai/splice_altering_general.png", height = 3, width = 3)
 ```
 
 
@@ -278,7 +278,7 @@ data_all_cancers =
 ## MAKE SURE SPLICE_ALTERING IS A FACTOR
 ggplot(data = data_all_cancers, aes(x = splice_altering, y = MAX_PROBABILITY, fill = splice_altering)) +
   geom_violin(trim = F) +
-  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.001) +
+  #geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.001) +
   scale_y_log10() +
   facet_wrap(facets = "primary_disease") +
   #facet_grid(. ~ primary_disease) +

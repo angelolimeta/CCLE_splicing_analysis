@@ -37,14 +37,17 @@ CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_in
 
 #LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
 mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/tcga_core_spliceosome_ccle_mutations.csv")
+head(mutations_spliceosome)
 ```
+
+
 
 Join tidy crispr data and join with metadata
 ```{r}
 gene_eff_meta = 
   gene_eff_df %>% 
   pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "value") %>% 
-  left_join(meta, by = "DepMap_ID")
+  left_join(CCLE_mutations, by = "DepMap_ID")
 
 head(gene_eff_meta)
 ```
