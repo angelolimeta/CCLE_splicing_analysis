@@ -1,0 +1,136 @@
+---
+title: "SpliceAI analysis - role of transitions and transversions in generation of new splice variants"
+output: html_notebook
+---
+
+Description: Classification of SNPs based on transitions and transversions and study of whether one of this is more prevalent than the other in the generation of new splicing sites. 
+
+Load libraries 
+```{r}
+library(tidyverse)
+library(data.table)
+
+rename = dplyr::rename
+select = dplyr::select
+```
+
+set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+splice_out_05 = readRDS("spliceai/spliceAI05_Annotated.rds")
+splice_out = fread("spliceai/output/spliceAI_out.csv")
+
+head(splice_out)
+```
+
+Create new column with highest probability 
+```{r}
+##TURN SCORE COLUMNS INTO NUMERIC VARIABLES
+#SELECT SCORE COLUMNS
+score_col = 
+  splice_out %>% 
+  select(contains("SCORE")) 
+
+#SELECT COLUMN NAMES
+cols.num <- colnames(score_col)
+
+#CONVERT INTO NUMERIC
+splice_out = as.data.frame(splice_out)
+splice_out[cols.num] <- sapply(splice_out[cols.num],as.numeric)
+
+head(splice_out)
+
+##SELECT MAX PROBABILITY FROM SPLICEAI OUTPUT
+splice_out_max =
+  splice_out%>% 
+  mutate(MAX_PROBABILITY = apply(X = splice_out[,10:13], MARGIN = 1, FUN = max)) %>% 
+  drop_na(MAX_PROBABILITY)
+```
+
+Combine REF and ALT columns 
+```{r}
+combined_splice = 
+  splice_out_max %>% 
+  unite(SUBS, c("REF", "ALT"), sep = "-")
+  
+head(combined_splice)
+```
+
+Annotate DNA substitutions as transcriptions or transversions
+```{r}
+splice_out_substitutions = 
+  combined_splice %>% 
+  mutate(SUBS = case_when(
+    SUBS == "G-A" ~ "G-A", 
+    SUBS == "A-G" ~ "G-A", 
+    SUBS == "C-T" ~ "C-T",
+    SUBS == "T-C" ~ "C-T",
+    SUBS == "G-T" ~ "G-T", 
+    SUBS == "T-G" ~ "G-T", 
+    SUBS == "A-T" ~ "A-T", 
+    SUBS == "T-A" ~ "A-T", 
+    SUBS == "C-A" ~ "C-A", 
+    SUBS == "A-C" ~ "C-A", 
+    SUBS == "C-G" ~ "G-C", 
+    SUBS == "G-C" ~ "G-C"
+    )) %>% 
+  drop_na(SUBS)
+
+splice_out_substitutions_ann = 
+  splice_out_substitutions %>% 
+  mutate(SUBS_ANNOTATION = case_when(
+    SUBS == "G-A" ~ "TRANSITION", 
+    #SUBS == "A-G" ~ "TRANSITION", 
+    SUBS == "C-T" ~ "TRANSITION", 
+    #SUBS == "T-C" ~ "TRANSITION",
+    SUBS == "G-T" ~ "TRANSVERSION", 
+    SUBS == "G-C" ~ "TRANSVERSION",
+    SUBS == "A-T" ~ "TRANSVERSION", 
+    #SUBS == "A-C" ~ "TRANSVERSION",
+    SUBS == "C-A" ~ "TRANSVERSION", 
+    #SUBS == "T-A" ~ "TRANSVERSION",
+    #SUBS == "C-G" ~ "TRANSVERSION", 
+    #SUBS == "T-G" ~ "TRANSVERSION"
+  )) %>% 
+  mutate(MAX_PROBABILITY = as.numeric(MAX_PROBABILITY)) %>% 
+  drop_na(MAX_PROBABILITY)
+```
+
+Plot number of each time of substitution 
+```{r}
+splice_out_substitutions %>% 
+  filter(MAX_PROBABILITY > 0.5) %>% 
+  ggplot(aes(SUBS)) + 
+  geom_bar(fill = "black") + 
+  theme_bw() + 
+  coord_flip()
+```
+
+
+Plot
+```{r}
+library(ggpubr)
+library(ggbeeswarm)
+library(viridis)
+
+
+splice_out_substitutions_ann %>% 
+  filter(MAX_PROBABILITY > 0.5) %>% 
+  ggplot(aes(reorder(SUBS, MAX_PROBABILITY), MAX_PROBABILITY, fill=SUBS_ANNOTATION)) +
+  geom_boxplot(scale = T) + 
+  #geom_jitter(alpha = 0.3, size = 0.3) + 
+  theme_bw() +
+  scale_fill_viridis_d(labels = c("Transition", "Transversion"), direction = -1) +
+  ylab("Probability of generating a splice event") +
+  xlab(NULL) + 
+  theme(axis.text.y = element_blank(),
+        legend.position = "bottom") 
+```
+
+` 
+

@@ -1,0 +1,272 @@
+---
+title: "Lancaster method for linear model results / term pancreatic cancer"
+output: html_notebook
+---
+
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(edgeR)
+library(ggpubr)
+library(dplyr)
+library(readr)
+library(biomaRt)
+library(data.table)
+library(aggregation)
+library(remotes)
+select = dplyr::select
+rename = dplyr::rename
+filter = dplyr::filter
+```
+
+source R profile. Memory was set to 500000.
+```{r, include=FALSE, echo=FALSE}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+## Load data
+```{r}
+transcripts <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+#METADATA
+sample_info <- read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/sample_info.csv") #metadata
+
+#MUTATIONS AND SAMPLE INFO
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("spliceosome/tcga_non_core_spliceosome_ccle_mutations.csv")
+```
+
+Load lm results from transcripts_lm
+```{r}
+lm_res = readRDS("../github/results/differential_expression/transcripts/tcga_non_core_spliceosome_lm_res_symbols.rds")
+
+head(lm_res)
+```
+
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+```{r}
+#RENAME FIRST VARIABLE 
+transcripts = 
+  transcripts %>% 
+  rename("DepMap_ID" = "X1")
+
+#JOIN TRANSCRIPT INFO WITH METADATA
+long_transcripts_info = 
+  transcripts %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "log_TPM") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID") 
+
+head(long_transcripts_info)
+```
+
+## Pre-processing 
+Create a new column for ensembl transcript ID 
+```{r}
+counts_lm = 
+  long_transcripts_info %>% 
+  select(Gene, stripped_cell_line_name, primary_disease, spliceosome_mutated, log_TPM)
+
+```
+Let's keep only those cancers with a relatively significant number of cell lines w/o mutations in the spliceosome:
+```{r}
+no_keep <- c("Adrenal Cancer", "Embryonal Cancer", "Non-cancerous", "Teratoma")
+
+#define notin operator
+`%notin%` <- Negate(`%in%`)
+
+df_deseq = 
+  counts_lm %>% 
+  filter(primary_disease %notin% no_keep)
+
+head(df_deseq)
+```
+
+Filter out those genes whose median for expression is lower than 1 across all samples
+```{r}
+median_counts =
+  df_deseq %>% 
+  group_by(Gene) %>% 
+  dplyr::mutate(median = median(log_TPM, na.rm=TRUE)) %>% 
+  filter(median > 1)
+
+median_counts = 
+  median_counts %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s") 
+   
+median_counts$ensembl_id <- gsub("\\(|\\)","",as.character(median_counts$ensembl_id))
+
+```
+
+For lancaster method, we need to use the mean expression for each transcript in order to weight each p-value
+```{r}
+mean_spliceosome = 
+  df_deseq %>% 
+  group_by(spliceosome_mutated, Gene) %>% 
+  summarise_at(vars(log_TPM), funs(mean(., na.rm = TRUE)))
+
+mean_disease = 
+  df_deseq %>% 
+  group_by(primary_disease, Gene) %>% 
+  summarise_at(vars(log_TPM), funs(mean(., na.rm = TRUE)))
+
+head(mean_spliceosome)
+```
+
+
+```{r}
+disease_weigths = 
+  mean_disease %>%
+  rename("weight" = "log_TPM") 
+```
+
+```{r}
+head(mean_disease)
+```
+```{r}
+mean_spliceosome_yes = 
+  mean_spliceosome %>%
+  filter(spliceosome_mutated =="YES") %>% 
+  rename("weight" = "log_TPM") %>% 
+  ungroup() %>% 
+  select(-spliceosome_mutated)
+
+mean_spliceosome_yes = 
+  mean_spliceosome_yes %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s") 
+   
+mean_spliceosome_yes$ensembl_id <- gsub("\\(|\\)","",as.character(mean_spliceosome_yes$ensembl_id))
+
+head(mean_spliceosome_yes)
+```
+
+Filter spliceosome mutated from linear model results 
+```{r}
+lm_spl = 
+  lm_res %>% 
+  filter(term == "spliceosome_mutatedYES")
+  
+head(lm_spl)
+```
+
+Join weights to correspondent p-value 
+```{r}
+lanc = 
+  lm_spl %>% 
+  left_join(mean_spliceosome_yes, by = c("Hugo_Symbol", "ensembl_id")) %>% 
+  select(Hugo_Symbol, ensembl_id, p.value, weight) 
+
+head(lanc)
+```
+
+## Lancaster method
+
+Let's do lancaster aggregation looping thorugh the list of p-values obtained from the linear model
+```{r}
+##CREATE A LIST WITH ALL GENES WITH MORE THAN 1 ISOFORM
+list_symbols = 
+  lm_spl %>% 
+  count(Hugo_Symbol) %>% 
+  rename("n_transcripts" = "n") %>% 
+  filter(n_transcripts > 1) %>% 
+  select(Hugo_Symbol) %>% 
+  as.data.frame()
+  
+
+##CREATE A DF TO STORE AGGREGATED P VALUES 
+n <- lengths(list_symbols)
+
+  #PREDEFINED DIMENSIONS
+df_ag = data.table(Hugo_Symbol = rep(as.character(NA), n),
+                   p.value = rep(0,n))
+
+##LOOP THROUGH HUGO SYMBOLS AND AGGREGATE THE P VALUES
+for (i in 1:n) {
+  ##GET HUGO_SYMBOL
+  temp_symbol = list_symbols[i,1]
+
+  ##EXTRACT P-VALUES AND WEIGHT FOR CORRESPONDING HUGO SYMBOL (IN LOOP)
+  temp = 
+    lanc %>% 
+    filter(Hugo_Symbol == temp_symbol) %>% 
+    select(c("p.value", "weight"))
+  
+  ##CREATE VECTOR OF P VALUES
+  temp_p = 
+    temp %>% 
+    pull(p.value)
+  
+  ##CREATE VECTOR OF WEIGHTS
+  temp_w = 
+    temp %>% 
+    pull(weight)
+  
+  ##LANCASTER
+  temp_agg = 
+    lancaster(temp_p, temp_w)
+  
+  ##STORE IN DATA TABLE
+  df_ag[i, Hugo_Symbol := as.character(temp_symbol)]
+  df_ag[i, p.value := temp_agg]
+}
+
+head(df_ag)
+
+```
+
+Get p-values of those genes w/o isoforms
+```{r}
+p.val_no_iso = 
+  lanc %>% 
+  select(-weight) %>% 
+  anti_join(df_ag, by = "Hugo_Symbol") %>% 
+  select(-ensembl_id)
+```
+
+Join with aggregated p-values 
+```{r}
+##DF CONTAINING ALL THE P-VALUES
+all_p.val = 
+  rbind(df_ag, p.val_no_iso)
+```
+
+Save p.values as RSD
+```{r}
+saveRDS(all_p.val, file = "res_lancaster/nocore_tcga_p_values_lancaster.rds")
+```

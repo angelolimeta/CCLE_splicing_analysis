@@ -1,0 +1,288 @@
+---
+title: "Analysis of MYC-target transcript variants - in cell lines with no-core spliceosome mutations"
+author: "Angelo Limeta"
+date: "06/01/2021"
+output:
+  html_document:
+    df_print: kable
+    toc: true
+    toc_float: true
+---
+
+## Load libraries
+```{r,echo=FALSE}
+library(tidyverse)
+library(edgeR)
+library(EnsDb.Hsapiens.v86) # human transcript annotation data
+library(org.Hs.eg.db)
+library(gt)
+library(piano)
+library(snow)
+library(snowfall)
+library(hrbrthemes)
+library(ggrepel)
+library(gridExtra)
+library(data.table)
+library(ggpubr)
+library(biomaRt)
+library(patchwork)
+
+# select = dplyr::select
+mutate = dplyr::mutate
+rename = dplyr::rename
+filter = dplyr::filter
+select = dplyr::select
+```
+
+```{r}
+#transcript expression 
+df_trans = read_csv("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+#mutations and metadata
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/tcga_non_core_spliceosome_CCLE_mutations.csv")
+
+#list of aggregated p values after linear model (before GSA)
+lancaster_pval = readRDS("/Users/castilln/Desktop/thesis/localdata/res_lancaster/nocore_tcga_p_values_lancaster.rds")
+
+```
+
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+```{r}
+#RENAME FIRST VARIABLE 
+transcripts = 
+  df_trans %>% 
+  dplyr::rename("DepMap_ID" = "X1")
+
+#JOIN TRANSCRIPT INFO WITH METADATA
+df_trans = 
+  transcripts %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "log_TPM") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+
+head(df_trans)
+```
+
+Extract those genes that are in the MYC hallmark gene set 
+
+Get list of genes in myc target gene sets 
+```{r}
+myc_target_v1 = fread("/Users/castilln/Desktop/thesis/localdata/gene_sets/myc/geneset_myc_target_v1.txt", header = F)
+myc_target_v2 = fread("/Users/castilln/Desktop/thesis/localdata/gene_sets/myc/geneset_myc_target_v2.txt", header = F)
+
+myc_target = rbind(myc_target_v1, myc_target_v2)
+
+myc_target = 
+  myc_target %>% 
+  unique() %>% 
+  as_vector()
+```
+
+Use grepl to get those genes in the gene set 
+```{r}
+matches <- unique(grep(paste(myc_target, collapse = "|"),
+                       df_trans$Gene, value = T))
+```
+
+Filter in df_trans for genes in "matches"
+```{r}
+df_filter = 
+  df_trans %>% 
+  filter(Gene %in% matches)
+```
+
+```{r}
+head(df_filter)
+```
+
+```{r}
+df_filter_sep = 
+  df_filter %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s")
+
+df_filter_sep$ensembl_id <- gsub("\\(|\\)","",as.character(df_filter_sep$ensembl_id))
+
+head(df_filter_sep)
+```
+
+Get only those genes with significant differential expression (p.value < 0.05)
+```{r}
+pval_myc = 
+  lancaster_pval %>% 
+  filter(Hugo_Symbol %in% myc_target) %>% 
+  filter(p.value < 0.05)
+
+head(pval_myc)
+```
+
+Join p value with expression data
+```{r}
+df_filter_pval = 
+  df_filter_sep %>% 
+  inner_join(pval_myc, by = "Hugo_Symbol")
+
+head(df_filter_pval)
+```
+
+save as RDS
+```{r}
+saveRDS(df_filter_pval, "res_lancaster/tcga_no_core_p_val_myc_targets.rds")
+```
+
+Get 5 genes with most significant p-values  
+```{r}
+most_sign = 
+  df_filter_pval %>% 
+  select(c("Hugo_Symbol",  "p.value")) %>% 
+  distinct() %>% 
+  slice_min(p.value, n = 10, with_ties =T) %>% 
+  select(Hugo_Symbol) %>% 
+  as_vector()
+
+df_filter_pval %>% 
+  select(c("Hugo_Symbol",  "p.value")) %>% 
+  distinct() %>% 
+  slice_min(p.value, n = 10, with_ties =T) 
+```
+
+Get canonical transcript IDs from biomart for the genes with most significantl p.values
+```{r}
+#get ids for genes with min pvalue
+genes = 
+  df_filter_pval %>% 
+  select(c("Hugo_Symbol",  "p.value")) %>% 
+  distinct() %>% 
+  slice_min(p.value, n = 10, with_ties =T) %>% 
+  pull(Hugo_Symbol)
+
+can_transcripts = getBM(attributes = c("hgnc_symbol","ensembl_gene_id", "ensembl_transcript_id", "transcript_is_canonical"), filters = "hgnc_symbol", values = genes,  mart = useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+
+
+#arrange information from biomart to join with lancaster info
+to_join_canonical_trans = 
+  can_transcripts %>% 
+  select(c("hgnc_symbol", "ensembl_transcript_id", "transcript_is_canonical")) %>% 
+  rename("Hugo_Symbol" = "hgnc_symbol", 
+         "ensembl_id" = "ensembl_transcript_id", 
+         "is_canonical" = "transcript_is_canonical")
+```
+
+Join transcipt p-value info with biomart canonical info 
+```{r}
+significant_canonical_transcript = 
+  df_filter_pval %>% 
+  filter(Hugo_Symbol %in% most_sign) %>% 
+  left_join(to_join_canonical_trans, by = c("Hugo_Symbol", "ensembl_id")) %>% 
+  select(-p.value) %>% 
+  mutate(is_canonical = replace_na(is_canonical, "alternative")) %>% 
+  mutate(is_canonical = ifelse(is_canonical == "1", "canonical", is_canonical))
+
+
+head(significant_canonical_transcript)
+```
+Plot
+```{r}
+significant_canonical_transcript %>% 
+filter(Hugo_Symbol == "RPLP0") %>%   drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM, fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene RPLP0")
+```
+
+Loop & plot
+```{r, fig.width8, fig.height=4}
+n <- length(genes)
+
+#empty list to store the plots
+plist <- list()
+
+for (i in 1:n) {
+  #get symbol
+  temp_symbol = genes[i]
+  
+  plist[[i]] = 
+    significant_canonical_transcript %>% 
+    filter(Hugo_Symbol == temp_symbol) %>%   
+    drop_na(spliceosome_mutated) %>% 
+   ggplot(aes(x = is_canonical, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        legend.position = "none"
+        ) + 
+  xlab("") +
+    ylab("log(TPM)") + 
+    ggtitle(as.character(temp_symbol))
+}
+
+#do.call(grid.arrange, c(plist, ncol = 5, nrow = 2)) 
+
+arranged <- ggarrange(plotlist = plist, ncol = 5, nrow = 2)
+
+ggsave("/Users/castilln/Desktop/thesis/figures/results/alt_canoincal_most_sign_nocore_myc_targets.png", arranged, width = 10)
+
+```
+
+
+```{r}
+significant_canonical_transcript %>% 
+filter(Hugo_Symbol == "RPLP0") %>% drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = is_canonical, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene RPLP0")
+```
+
+

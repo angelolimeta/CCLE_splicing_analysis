@@ -98,9 +98,13 @@ long_transcripts_info =
 head(long_transcripts_info)
 ```
 
+
+```{r}
+saveRDS(long_transcripts_info,"depmap/annotated_transcripts.rds")
+```
+
+
 ## Pre-processing 
-
-
 
 Create a new column for ensembl transcript ID 
 ```{r}
@@ -259,5 +263,9 @@ all_p.val =
 Save p.values as RSD
 ```{r}
 saveRDS(all_p.val, file = "/Users/castilln/Desktop/thesis/github/results/linear_models/transcripts/p_values_lancaster.rds")
+```
+
+```{r}
+readRDS("../../../results/differential_expression/transcripts/p_values_lancaster.rds")
 ```
 

@@ -1,0 +1,257 @@
+---
+title: "Gene effect: filtered out IN/DELs, no MSK"
+output: html_notebook
+---
+
+Libraries
+```{r}
+library(tidyverse)
+library(data.table)
+library(ggbeeswarm)
+library(readr)
+library(ggpubr)
+
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+#DEPMAP somatic mutations
+ccle = fread("depmap/ccle_info_21q1.csv")
+ccle = 
+  ccle %>% 
+  rename("SYMBOL" = "Hugo_Symbol")
+
+#CRISPR gene effect
+gene_effect = fread("depmap/achilles/Achilles_gene_effect.csv")
+
+#LOAD ACTIONABLE SPLICE OUTPUT (ALREADY FILTERED FOR MSK) 
+splice_genes = readRDS("spliceai/spliceAI05_Annotated.rds")
+head(splice_genes)
+```
+
+
+Extract MSK IMPACT genes present in the spliceAI output
+(This data frame has already been filtered for MSK IMPACT genes)
+```{r}
+list_spliced_genes =
+  splice_genes %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  pull()
+
+head(list_spliced_genes)
+```
+
+
+Select variables of interest from ccle and filter out MSK IMPACT genes
+```{r}
+df_mutation_meta = 
+  ccle %>% 
+  select(DepMap_ID, SYMBOL, primary_disease, Variant_Type, isDeleterious) %>% 
+  filter(SYMBOL %in% list_spliced_genes)
+head(df_mutation_meta)
+```
+
+Create new column with custom isDeleterious information. isDeleterious only if mutation is an insertion or deletion
+```{r}
+df_mutation_delet = 
+  df_mutation_meta %>% 
+  mutate(isDel = ifelse(Variant_Type == "SNP", FALSE, TRUE)) %>% 
+  select(-isDeleterious)
+
+dim(df_mutation_delet)
+head(df_mutation_delet)
+```
+
+Pivot long effect matrix and filter for MSK IMPACT genes
+```{r}
+##PIVOT LONG EFFECT MATRIX
+df_crispr = 
+  gene_effect %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "SYMBOL", values_to = "gene_effect") %>% 
+  mutate(SYMBOL = gsub(" .*","",SYMBOL)) %>% 
+  filter(SYMBOL %in% list_spliced_genes)
+
+head(df_crispr)
+dim(df_crispr)
+```
+
+Add splice variant annotation to spliceAI output data frame
+Since this data has already been filtered for SNPs producing a splice variant with >0.5 confidence, as predicted by the NN, we can simply tag all SNPs as TRUE
+```{r, fig.height=10, fig.width=10}
+df_splice = 
+  splice_genes %>% 
+  mutate(splice_variant = TRUE,
+         splice_gene = SYMBOL) %>%
+  select(DepMap_ID,SYMBOL,primary_disease,splice_variant,splice_gene,MAX_PROBABILITY, exon_intron)
+
+head(df_splice)
+dim(df_splice)
+```
+
+Filter out SNPs without cell line annotation (this is due to different versions of CCLE data being used)
+```{r}
+df_splice = 
+  df_splice %>% 
+  filter(!is.na(DepMap_ID))
+dim(df_splice)
+```
+
+Create new column with custom isDeleterious information. isDeleterious only if mutation is an insertion or deletion
+```{r}
+df_mutation_delet = 
+  df_mutation_meta %>% 
+  mutate(isDel = ifelse(Variant_Type == "SNP", FALSE, TRUE)) %>% 
+  select(-isDeleterious)
+
+dim(df_mutation_delet)
+head(df_mutation_delet)
+```
+
+
+
+Now, let's join the spliceAI output with the CCLE mutation annotation information.
+```{r}
+df_splice_annot = 
+  df_splice %>% 
+  left_join(df_mutation_delet, by = c("SYMBOL", "DepMap_ID", "primary_disease")) %>% 
+  distinct() %>% 
+  #indicate those splice variants that occur in a different gene than the one we gave as input
+  mutate(off_target = ifelse(is.na(Variant_Type), TRUE, FALSE)) %>% 
+  #Substitute NAs from Variant_Type with "SNP"
+  mutate(Variant_Type = ifelse(is.na(Variant_Type), "SNP", Variant_Type)) 
+
+df_off_target_nomsk = 
+  df_splice_annot %>% 
+  filter(off_target == T) %>% 
+  select(-c("Variant_Type", "isDel", "splice_gene"))
+
+view(df_off_target_nomsk)
+#write_csv(df_off_target_nomsk, "spliceai/off_targe_spliceAIout.csv")
+
+dim(df_splice_annot)
+head(df_splice_annot)
+```
+
+
+Let's process the mutation metadata in order to tag each gene in each cell line if at least one of the variants in that gene is deleterious.
+```{r}
+df_mutation_delet_tag =
+  df_mutation_delet %>% 
+  group_by(DepMap_ID, SYMBOL) %>% 
+  summarise(gene_deleterious = ifelse(sum(isDel) > 0,TRUE,FALSE)) %>% 
+  ungroup()
+
+head(df_mutation_delet_tag)
+dim(df_mutation_delet_tag)
+```
+
+Now we can join the deleterious mutation annotated genes and cell lines with the spliceAI output
+```{r}
+df_splice_deleterious = 
+ df_splice_annot %>% 
+  left_join(df_mutation_delet_tag, by = c("SYMBOL", "DepMap_ID")) %>% 
+  distinct()
+
+head(df_splice_deleterious)
+dim(df_splice_deleterious)
+
+df_splice_deleterious_off = 
+  df_splice_deleterious %>% 
+  filter(off_target == T)
+
+dim(df_splice_deleterious_off)
+```
+Add disease info to crispr data
+```{r}
+disease_ccle = 
+  ccle %>% 
+  select(primary_disease, DepMap_ID) %>% 
+  distinct()
+```
+
+Finally, we can join this with the CRISPR knockdown data
+```{r, fig.height=10, fig.width=10}
+df_crispr_splice_annot = 
+  df_splice_deleterious_off %>% 
+  full_join(df_crispr, by = c("DepMap_ID", "SYMBOL")) %>% 
+  # Cell lines without mutations in the MSK IMPACT genes are annotated as FALSE 
+  # in both of the splice_variant and gene_deleterious columns
+  mutate(splice_variant = ifelse(is.na(splice_variant),FALSE,splice_variant)) %>% 
+  mutate(gene_deleterious = ifelse(is.na(gene_deleterious),FALSE, gene_deleterious)) %>%
+  # Filter out cell lines without CRISPR knockdown effect data
+  filter(!is.na(gene_effect)) %>% 
+  mutate(isDel = ifelse(is.na(isDel), FALSE, isDel))
+
+
+#df_crispr_splice_annot %>% 
+ # filter(is.na(primary_disease))
+
+#Add disease information for the SNPs coming from gene effect dataframe 
+df_crispr_splice_annot = 
+  df_crispr_splice_annot %>% 
+  left_join(disease_ccle, by = "DepMap_ID") %>% 
+  select(-primary_disease.x) %>% 
+  rename("primary_disease" = "primary_disease.y") %>% 
+  mutate(variant = case_when(
+    splice_variant == TRUE ~ "Var", 
+    splice_variant == FALSE ~ "WT"
+  ))
+
+sum(df_crispr_splice_annot$variant == "Var")
+```
+
+```{r, fig.height=10, fig.width=10}
+df_crispr_splice_annot %>% 
+  group_by(SYMBOL) %>% 
+  mutate(sum_splice_variants = sum(splice_variant)) %>% 
+  ungroup() %>%
+  filter(sum_splice_variants >= 5) %>% 
+  ggplot(aes(y = gene_effect, x = variant, color = variant)) + 
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("SYMBOL") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("CRISPR gene effect (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") + 
+  stat_compare_means(label = "p.format", label.y = 4.5, label.x = 1)
+
+#ggsave(filename = "../figures/results/msk_impact/gene_effect/spliceAI_out_05_actionable_geneEffect_filteroutINDELs_wilcoxon.png", height = 10, width = 10)
+```
+
+```{r, fig.height=10, fig.width=10}
+df_crispr_splice_annot %>% 
+  filter(gene_deleterious == FALSE) %>%
+  group_by(SYMBOL) %>% 
+  mutate(sum_splice_variants = sum(splice_variant)) %>% 
+  ungroup() %>%
+  filter(sum_splice_variants > 3) %>% 
+  ggplot(aes(y = gene_effect, x = variant, color = variant)) + 
+  geom_quasirandom(alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("primary_disease") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("CRISPR gene effect (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom") + 
+  stat_compare_means(label = "p.format", label.y = 4.5, label.x = 1)
+```

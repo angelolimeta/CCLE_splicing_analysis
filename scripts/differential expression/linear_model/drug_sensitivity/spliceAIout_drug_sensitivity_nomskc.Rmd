@@ -1,0 +1,179 @@
+---
+title: "SpliceAI output Drug sensitivity - no filtering with MSKCC"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(ggbeeswarm)
+
+select = dplyr::select
+rename = dplyr::rename
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+```{r}
+library(readr)
+#sensitivity data
+drug_sens = fread("depmap/drug_sensitivity/primary-screen-replicate-collapsed-logfold-change.csv")
+
+#drug metadata
+meta_drug = fread("depmap/drug_sensitivity/primary-screen-replicate-treatment-info.csv")
+
+#somatic mutations depmap
+ccle <- fread("depmap/CCLE.csv")
+meta = fread("depmap/sample_info.csv")
+
+ccle = 
+  ccle %>% 
+  left_join(meta, by ="DepMap_ID")
+
+#load spliceAI output data
+splice_out_ann = readRDS("spliceai/spliceAI05_Annotated.rds")
+```
+
+Join drug data with metadata 
+```{r}
+drug_sens = 
+  drug_sens %>% 
+  rename("DepMap_ID" = "V1")
+
+#pivot longer and join metadata 
+long_sensitivity = 
+  drug_sens %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "broad_id", values_to = "sensitivity") 
+
+#take away information after :: in broad_id
+long_sensitivity =
+  as.data.frame(lapply(long_sensitivity, function(y) gsub(":.*", "", y)))
+
+#join meta data
+sensitivity_meta = 
+  long_sensitivity %>% 
+  left_join(meta_drug, by = "broad_id") %>% 
+  rename("SYMBOL" = "target")
+
+head(sensitivity_meta)
+```
+
+
+Number of variants predicted by spliceAI per gene 
+```{r}
+splice_out_ann %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(SYMBOL,var_per_gene) %>% 
+  distinct() %>% 
+  arrange(desc(var_per_gene))
+```
+```{r}
+df_splice = 
+  splice_out_ann %>% 
+  mutate(splice_mutation = 1,
+         splice_gene = SYMBOL) %>%
+  select(DepMap_ID,SYMBOL,primary_disease,splice_mutation)
+
+genes_splice_drugable = 
+  df_splice %>% 
+  full_join(sensitivity_meta, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),0,1)) %>% 
+  select(SYMBOL) %>% 
+  distinct() 
+
+dim(genes_splice_drugable)  
+```
+
+```{r, fig.width = 15, fig.height=15}
+#select only those with alterations in more than 10 cell lines
+spliced_genes_more_5_cellines = 
+  df_splice %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  filter(var_per_gene > 7) %>% 
+  distinct()
+
+##SENSITIVITY OF THE GENES WITH SPLICE VARIANTS
+sensitivity_meta_more = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% spliced_genes_more_5_cellines$SYMBOL) %>% 
+  distinct()
+
+##ANNOTATE DISEASE
+disease = 
+  ccle %>% 
+  select(DepMap_ID, primary_disease)
+
+sensitivity_meta_more = 
+  sensitivity_meta_more %>% 
+  left_join(disease, by = "DepMap_ID")
+
+df_plot = 
+  df_splice %>% 
+  full_join(sensitivity_meta_more, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>% 
+  rename("primary_disease" = "primary_disease.y")
+
+
+df_plot$sensitivity = 
+  as.numeric(df_plot$sensitivity)
+
+df_plot$sensitivity = 
+  round(df_plot$sensitivity, digits = 3)
+
+df_plot_plot = 
+  df_plot %>% 
+  select(DepMap_ID, primary_disease, sensitivity, name, SYMBOL, splice_mutation)
+
+
+your_font_size <- 2
+
+ggplot(df_plot %>%  mutate(group = paste(name, SYMBOL, sep = "-")), aes(y = sensitivity,x = splice_mutation, color = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("group") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) + 
+    stat_compare_means(method = "t.test", label = "p.format", label.y = 2, label.x = 0.6, size = your_font_size)
+  
+ggsave("../figures/results/msk_impact/drug/NOMSKFILTERED_drug_sensitivity_var_vs_wt_more7cellLines.png", width = 13, height = 13)
+```
+
+
+Repeat plot without faceting
+```{r}
+ggplot(df_plot_plot %>%  mutate(group = paste(name, SYMBOL, sep = "-")), aes(y = sensitivity,x = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation, color = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  facet_wrap("primary_disease") + 
+  theme_bw() + 
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) + 
+    stat_compare_means(method = "t.test", label = "p.format", label.y = 2, label.x = 0.6, size = your_font_size)
+
+ggsave("../figures/results/msk_impact/drug/NOMSK_sensitivity_var_vs_wt_percancer_ttest.png", height = 8, width = 10)
+```
+
+

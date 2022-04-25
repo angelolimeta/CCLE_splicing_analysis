@@ -1,0 +1,284 @@
+---
+title: "Spliceosome analysis of core factors - splicing factors list from TCGA"
+output: html_notebook
+---
+
+Description: analysis of core splicing factors (using list from TCGA). Generated binary heatmaps based on presence / absence of the mutation in a certain cell line.
+
+Load libraries 
+```{r}
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(readxl)
+library(RColorBrewer)
+library(ggrepel)
+library(tidyHeatmap)
+
+rename = dplyr::rename
+select = dplyr::select
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+
+Load data 
+```{r}
+splicing_factors <- read_excel("spliceosome/TCGA_spliceosome.xlsx")
+CCLE_mutations = fread("depmap/ccle_info_21q1.csv", header = TRUE) #mutations and sample info 
+
+head(splicing_factors)
+```
+
+
+Rename and clean splicing factor dataframe
+```{r}
+df_factors = 
+  splicing_factors %>% 
+  rename("Hugo_Symbol" = "Gene Symbol") %>% 
+  select(Hugo_Symbol, `Category Hegele`, `Complex -SpliceosomeDB`, `Consensus group`, `Hotspot vs. LoF cohorts`, `High mutation rate tumor only`) %>% 
+  rename("Category" = "Category Hegele", 
+         "Consensus_group" = "Consensus group", 
+         "Complex" = "Complex -SpliceosomeDB",
+         "Hotspot_LoF_cohorts" = "Hotspot vs. LoF cohorts", 
+         "High_mutation_rate" = "High mutation rate tumor only")
+
+head(df_factors)
+```
+
+Get list of symbols classified as splicing factors 
+```{r}
+list_splicing_factors = 
+  df_factors %>% 
+  select(Hugo_Symbol) %>% 
+  pull()
+```
+
+Select mutations of CCLE affecting splicing factors
+```{r}
+df_ccle_factors = 
+  CCLE_mutations %>% 
+  filter(Hugo_Symbol %in% list_splicing_factors) %>% 
+  select(DepMap_ID, Hugo_Symbol, cDNA_Change, primary_disease, Variant_Type, Annotation_Transcript)
+
+head(df_ccle_factors)
+```
+
+Join with information from TCGA
+```{r}
+df_ccle_factors = 
+  df_ccle_factors %>% 
+  left_join(df_factors, by = "Hugo_Symbol") 
+
+"other" <- df_ccle_factors$Consensus_group[is.na(df_ccle_factors$Consensus_group)]
+
+head(df_ccle_factors)
+```
+
+Let's filter based on core/non-core
+```{r}
+core_ccle = 
+  df_ccle_factors %>% 
+  filter(Category != "non-core") %>% 
+  filter(!is.na(Category))
+```
+
+Get number of core mutations
+```{r}
+core_ccle %>% 
+  select(Hugo_Symbol) %>% 
+  unique()
+```
+
+
+## Normalization
+Get nr of cell lines studied per disease
+```{r}
+## DF WITH NUMBER OF STUDIED CELL LINES PER CANCER
+normalize_cell_lines = 
+  CCLE_mutations %>% 
+  group_by(primary_disease) %>% 
+  distinct(stripped_cell_line_name) %>% 
+  #count n of distinct cell lines for each cancer #sometimes problems with masking of function
+  count(primary_disease) %>% 
+  rename("cell_lines_number" = "n") 
+
+head(normalize_cell_lines)
+```
+
+Average number of mutations per cancer
+```{r}
+normalized_mutations_cancer =   
+  core_ccle %>% 
+  group_by(primary_disease) %>% 
+  #count observations per cancer  
+  tally() %>% 
+  rename("MUTATIONS_PER_CANCER" = "n") %>% 
+  left_join(normalize_cell_lines, by = "primary_disease") %>% 
+  #normalize for the number of cell lines studied
+  mutate(NORMALIZED_MUTATIONS = MUTATIONS_PER_CANCER / cell_lines_number) %>% 
+  rename("DISEASE" = "primary_disease")
+
+head(normalized_mutations_cancer)
+```
+
+Plot
+```{r, fig.height=3, fig.width=3.3}
+  ggplot(data=normalized_mutations_cancer, aes(x = reorder(DISEASE, NORMALIZED_MUTATIONS), y = NORMALIZED_MUTATIONS)) +
+  geom_bar(stat = "identity", fill = "black") +
+  geom_text(aes(label = sprintf("%0.2f", round(NORMALIZED_MUTATIONS, digits =2))), size = 2, position = "dodge", hjust=-0.1) +
+  xlab(NULL) + 
+  ylab("Average number of mutations per cell line") + 
+  ggtitle("Number of mutations in the core splicing machinery") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  coord_flip() 
+
+ggsave("../../../figures/exploration/n_mutations_core.png", height = 5, width = 6.8)
+```
+
+
+Gene length for normalization
+```{r}
+gene_length = fread("gene_length.csv", select = c("Hugo_Symbol", "Transcript", "Length"))
+```
+
+Normalize mutations per transcript length
+```{r}
+normalized_mutations_gene =
+  core_ccle %>%
+  group_by(Hugo_Symbol, Annotation_Transcript) %>% 
+  tally() %>% 
+  rename("MUTATIONS" = "n") 
+
+normalized_mutations_gene$Annotation_Transcript =   
+  gsub("\\..*", "", normalized_mutations_gene$Annotation_Transcript)
+
+gene_length = 
+  gene_length %>% 
+  select(-Hugo_Symbol)
+
+normalized_mutations_gene = 
+  normalized_mutations_gene %>%   
+  rename("Transcript" = "Annotation_Transcript") %>% 
+  left_join(gene_length, by = "Transcript") %>% 
+  #normalize by gene length
+  mutate(NORMALIZED_MUTATIONS = MUTATIONS / Length) %>% 
+  arrange(desc(NORMALIZED_MUTATIONS)) %>% 
+  ungroup()
+
+normalized_mutations_gene %>% 
+  top_n(20)
+```
+
+Most mutated spliceosomal genes per cancer 
+```{r}
+top_mutations_cancer = 
+  core_ccle %>% 
+  select(Hugo_Symbol, primary_disease, Annotation_Transcript, DepMap_ID) %>% 
+  rename("Transcript" = "Annotation_Transcript") %>% 
+  group_by(Hugo_Symbol, Transcript) %>%
+  count(primary_disease) %>% 
+  rename("MUTATIONS" = "n") %>% 
+  ungroup() %>% 
+  group_by(primary_disease) %>% 
+  arrange(desc(MUTATIONS)) %>% 
+  top_n(3)
+
+head(top_mutations_cancer)
+
+top_mutations_cancer$Transcript =   
+  gsub("\\..*", "", top_mutations_cancer$Transcript)
+
+##FOR VISUALIZATION: NORMALIZE PER TRANSCRIPT LENGTH 
+#THERE IS NO LENGTH INFORMATION FOR ALL GENES
+norm_top_mutations_cancer = 
+  top_mutations_cancer %>% 
+  left_join(gene_length, by ="Transcript") %>% 
+  mutate(NORM_MUTATIONS = MUTATIONS/Length)
+
+head(norm_top_mutations_cancer)
+```
+
+
+Heatmap
+```{r}
+##PREPARE FOR HEATMAP
+#PIVOT WIDER
+df = 
+  norm_top_mutations_cancer %>%
+  select(Hugo_Symbol, Transcript, primary_disease, MUTATIONS, NORM_MUTATIONS) %>% 
+  pivot_wider(id_cols = c("Hugo_Symbol"), names_from = primary_disease, values_from = NORM_MUTATIONS)
+  
+  
+ # pivot_wider(id_cols = NULL, names_from = primary_disease, values_from = NORM_MUTATIONS)%>% 
+  #filter(!is.na(Hugo_Symbol))  #pivot wider to get a df with mutations, disease and relative mutation rate
+
+df[is.na(df)] <- 0 #convert na values in 0
+
+df %>%
+  select(-c(Engineered, Unknown)) %>% 
+  rename("Gene"="Hugo_Symbol") -> df #remove Engineered and Unknown classes
+
+df[ , colSums(is.na(df)) == 0] -> df #drop columns containing na values
+
+head(df)
+```
+
+Prepare data for tidy heatmap
+```{r}
+df_hm_tidy = 
+  df %>% 
+  pivot_longer(cols = -Gene ,  names_to = "DISEASE", values_to = "Relative_mutation") %>% 
+  left_join(normalized_mutations_cancer, by = "DISEASE") 
+```
+
+Draw tidy heatmap
+```{r, fig.width=8, fig.height=6}
+#heatmap of number of mutations for each gene across cancer: only non-silent and non-SNP mutations
+df_hm_tidy %>%
+  heatmap(Gene, DISEASE, Relative_mutation,
+          palette_value = circlize::colorRamp2(c(0,1), viridis::magma(2))) %>% 
+  add_bar(NORMALIZED_MUTATIONS) %>% 
+  add_bar(cell_lines_number) 
+```
+Mutations core spliceosome
+```{r, fig.height=9, fig.width=7}
+library(tidyHeatmap)
+
+mutations_core = 
+  core_ccle %>% 
+  group_by(primary_disease) %>% 
+  count(Hugo_Symbol) %>% 
+  rename("number" = "n") %>% 
+  ungroup() %>% 
+  mutate(mutated = case_when(
+    number > 0 ~ 1, 
+    number <= 0 ~ 0
+  )) 
+
+mutations_core = 
+  mutations_core %>% 
+  left_join(normalize_cell_lines, by = "primary_disease") 
+
+core_hm = mutations_core %>% 
+  group_by(Hugo_Symbol, primary_disease) %>% 
+  heatmap(Hugo_Symbol, primary_disease, mutated,
+            palette_value = circlize::colorRamp2(c(1,0), viridis::cividis(2))) %>% 
+  add_bar(cell_lines_number)
+
+core_hm %>% save_pdf("../../../figures/exploration/core_binary_hm.pdf", height = 12)
+
+
+```
+

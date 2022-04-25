@@ -1,0 +1,418 @@
+---
+title: "MSKCC-IMPACT Drug sensitivity"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(ggbeeswarm)
+
+select = dplyr::select
+rename = dplyr::rename
+```
+source R profile. Memory was set to 500000.
+```{r}
+Sys.setenv("R_ENVIRON_USER"='/Users/castilln/.Renviron')
+Sys.getenv("R_ENVIRON_USER")
+
+```
+
+Set wd 
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data
+```{r}
+library(readr)
+#mskcc gene list
+data_mutations_mskcc <- read_delim("msk-impact/msk_impact_2017/data_mutations_mskcc.txt", 
+    "\t", escape_double = FALSE, trim_ws = TRUE, 
+    skip = 1)
+
+#sensitivity data
+drug_sens = fread("depmap/drug_sensitivity/primary-screen-replicate-collapsed-logfold-change.csv")
+
+#drug metadata
+meta_drug = fread("depmap/drug_sensitivity/primary-screen-replicate-treatment-info.csv")
+
+#somatic mutations depmap
+ccle <- fread("depmap/CCLE_info")
+```
+
+Format dfs
+```{r}
+#rename variables
+mskcc = 
+  data_mutations_mskcc %>% 
+  dplyr::select(-c("Entrez_Gene_Id", "Center")) %>% 
+  dplyr::rename("SYMBOL" = "Hugo_Symbol")
+
+head(mskcc)
+```
+
+Join drug data with metadata 
+```{r}
+drug_sens = 
+  drug_sens %>% 
+  rename("DepMap_ID" = "V1")
+
+#pivot longer and join metadata 
+long_sensitivity = 
+  drug_sens %>% 
+  pivot_longer(cols = -DepMap_ID, names_to = "broad_id", values_to = "sensitivity") 
+
+#take away information after :: in broad_id
+long_sensitivity =
+  as.data.frame(lapply(long_sensitivity, function(y) gsub(":.*", "", y)))
+
+#join meta data
+sensitivity_meta = 
+  long_sensitivity %>% 
+  left_join(meta_drug, by = "broad_id") %>% 
+  rename("SYMBOL" = "target")
+
+head(sensitivity_meta)
+```
+Filter the results from SpliceAI for genes in MSKIMPACT panel
+```{r}
+##RESULTS FROM SPLICEAI
+splice_out_ann = readRDS("spliceai/spliceAI05_Annotated.rds")
+
+#FILTER THOSE GENES IN MSKCC WITH PREDICTED SPLICE VARIANTS
+df_splice_actionable =
+  mskcc %>% 
+  select(SYMBOL) %>% 
+  distinct() %>%
+  left_join(splice_out_ann, by = "SYMBOL") %>% 
+  distinct()
+
+head(df_splice_actionable)
+#dup = duplicated(df_splice_actionable)
+#df_splice_actionable[dup,]
+
+#dup_splice = duplicated(splice_out_ann)
+#sum(dup_splice)
+
+df_splice_actionable %>% 
+  ggplot(aes(y = SYMBOL, group = SYMBOL)) +
+  geom_bar()
+
+df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(SYMBOL,var_per_gene) %>% 
+  distinct() %>% 
+  arrange(desc(var_per_gene))
+```
+
+```{r}
+## CREATE NEW COLUMN TO INDICATE THAT THE GENE HAS A PREDICTED VARIANT
+df_splice_actionable = 
+  df_splice_actionable %>% 
+  mutate(splice_mutation = 1,
+         splice_gene = SYMBOL) %>%
+  select(DepMap_ID,SYMBOL,primary_disease,splice_mutation,splice_gene)
+
+## GET LIST OF ACTIONABLE GENES
+actionable_genes =
+  df_splice_actionable %>% 
+  select(SYMBOL) %>% 
+  distinct() %>% 
+  pull() 
+
+length(actionable_genes)
+
+# Filter oput MSKCC IMPACT genes
+df_mskcc_sensitivity =
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes)
+
+head(df_mskcc_sensitivity)
+```
+
+```{r}
+actionable_genes_drug = 
+df_splice_actionable %>% 
+  inner_join(df_mskcc_sensitivity, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),0,1)) %>% 
+  select(SYMBOL) %>% 
+  distinct()  
+
+head(actionable_genes_drug)
+  
+#dim(actionable_genes_drug)
+```
+
+Plot per gene, all
+```{r, fig.width=10, fig.height=10}
+library(ggpubr)
+#select only those with alterations in more than 10 cell lines
+actionable_genes_all = 
+  df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  distinct() %>% 
+  filter(var_per_gene >3)
+
+sensitivity_meta_more = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes_all$SYMBOL) %>% 
+  distinct()
+
+df_plot = 
+df_splice_actionable %>% 
+  full_join(sensitivity_meta_more, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>% 
+  select(SYMBOL, splice_mutation, DepMap_ID, sensitivity) %>% 
+  distinct() 
+
+df_plot$sensitivity = 
+  as.numeric(df_plot$sensitivity)
+
+df_plot$sensitivity = 
+  round(df_plot$sensitivity, digits = 3)
+
+
+  ggplot(df_plot, aes(y = sensitivity,x = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation,color = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("SYMBOL", scales = "free") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) +
+    stat_compare_means(label = "p.format")
+  
+  #ggsave("../figures/results/msk_impact/drug/spliceAI_actionablegenes_drugsensitivity_all.png")
+
+```
+
+
+Filter for variants with more than 10 cell lines affected
+```{r, fig.width=10, fig.height=10}
+#select only those with alterations in more than 10 cell lines
+actionable_genes_more_5_cellines = 
+  df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  filter(var_per_gene > 5) %>% 
+  distinct()
+
+sensitivity_meta_more = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes_more_5_cellines$SYMBOL) %>% 
+  distinct()
+
+df_plot = 
+df_splice_actionable %>% 
+  full_join(sensitivity_meta_more, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>% 
+  select(SYMBOL, splice_mutation, DepMap_ID, sensitivity) %>% 
+  distinct() 
+
+df_plot$sensitivity = 
+  as.numeric(df_plot$sensitivity)
+
+df_plot$sensitivity = 
+  round(df_plot$sensitivity, digits = 3)
+
+
+  ggplot(df_plot, aes(y = sensitivity,x = splice_mutation, color = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("SYMBOL", scales = "free") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        )
+
+  
+#ggsave("../figures/results/msk_impact/drug/spliceAI_actionablegenes_drugsensitivity_more5.png")
+```
+
+
+Plot per drug, all
+```{r, fig.width= 20, fig.height= 20, warning=F}
+library(ggpubr)
+
+actionable_genes_all = 
+  df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  filter(var_per_gene >= 3) %>% 
+  distinct()
+
+sensitivity_meta = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes_all$SYMBOL) %>% 
+  distinct()
+head(sensitivity_meta)
+
+plot_drug =  
+  df_splice_actionable %>% 
+  full_join(sensitivity_meta, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>%
+  select(SYMBOL, splice_mutation, DepMap_ID, sensitivity, broad_id, name) %>% 
+  distinct() 
+
+#transform sensitivity to numeric
+plot_drug$sensitivity = 
+  as.numeric(plot_drug$sensitivity)
+
+#round sensitivity data to 3 decimals
+plot_drug$sensitivity = 
+  round(plot_drug$sensitivity, digits = 3)
+
+your_font_size <- 2
+
+
+  ggplot(plot_drug %>%  mutate(group = paste(name, SYMBOL, sep = "-")), aes(y = sensitivity,x = splice_mutation, color = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("group") +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) + 
+    stat_compare_means(method = "t.test", label = "p.format", label.y = 2.8, label.x = 0.6, size = your_font_size)
+  
+#ggsave("../figures/results/msk_impact/drug/spliceAI_actionablegenes_drugsensitivity_perDrug_t_test.png", height = 20, width = 23)
+
+```
+
+Plot per drug, filter for cell lines with more than 10 variants
+```{r, fig.width=10, fig.height=10}
+actionable_genes_5 = 
+  df_splice_actionable %>% 
+  group_by(SYMBOL) %>% 
+  mutate(var_per_gene = length(SYMBOL)) %>% 
+  ungroup() %>% 
+  select(DepMap_ID, SYMBOL, var_per_gene) %>% 
+  filter(var_per_gene >5 ) %>%
+  distinct()
+
+sensitivity_meta_5 = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes_5$SYMBOL) %>% 
+  distinct()
+
+head(sensitivity_meta)
+
+plot_drug =  
+  df_splice_actionable %>% 
+  full_join(sensitivity_meta_5, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>%
+  select(SYMBOL, splice_mutation, DepMap_ID, sensitivity, broad_id, name) %>% 
+  distinct() 
+
+#transform sensitivity to numeric
+plot_drug$sensitivity = 
+  as.numeric(plot_drug$sensitivity)
+
+#round sensitivity data to 3 decimals
+plot_drug$sensitivity = 
+  round(plot_drug$sensitivity, digits = 3)
+```
+
+```{r, fig.width=10, fig.height=10}
+##PLOT
+  ggplot(plot_drug %>%  mutate(group = paste(name, SYMBOL, sep = "-")), aes(y = sensitivity,x = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation, color = splice_mutation)) +
+  #geom_jitter(alpha = 0.5, size = 0.5) +
+  geom_beeswarm(method = "pseudorandom",alpha = 0.2, size = 0.5) + 
+  theme_bw() +
+  facet_wrap("group") +
+  scale_color_manual(values = c("red","gray")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) + 
+    stat_compare_means(method = "t.test", label = "p.format", label.y = -6, label.x = 1)
+  
+#ggsave("../figures/results/msk_impact/drug/spliceAI_actionablegenes_drugsensitivity_perDrug_more5_ttest.png", height = 12, width = 10)
+```
+Repeat plot without faceting, per disease
+```{r, fig.width=10, fig.height=10}
+##ANNOTATE DISEASE
+disease = 
+  ccle %>% 
+  select(DepMap_ID, primary_disease) %>% 
+  distinct()
+
+sensitivity_meta_dis = 
+  sensitivity_meta %>% 
+  filter(SYMBOL %in% actionable_genes_all$SYMBOL) %>% 
+  distinct() %>% 
+  left_join(disease, by = "DepMap_ID")
+
+plot_drug_dis = 
+  df_splice_actionable %>% 
+  full_join(sensitivity_meta_dis, by = c("DepMap_ID","SYMBOL")) %>% 
+  filter(!is.na(sensitivity)) %>% 
+  mutate(splice_mutation = as.character(splice_mutation)) %>% 
+  mutate(splice_mutation = ifelse(is.na(splice_mutation),"WT","Var")) %>% 
+  distinct() %>%
+  select(SYMBOL, splice_mutation, DepMap_ID, sensitivity, broad_id, name, primary_disease.y) %>% 
+  rename("primary_disease" = "primary_disease.y")
+
+#transform sensitivity to numeric
+plot_drug_dis$sensitivity = 
+  as.numeric(plot_drug_dis$sensitivity)
+
+#round sensitivity data to 3 decimals
+plot_drug_dis$sensitivity = 
+  round(plot_drug_dis$sensitivity, digits = 3)
+
+##PLOT
+  ggplot(plot_drug_dis, aes(y = sensitivity,x = splice_mutation)) + 
+  geom_boxplot(aes(x = splice_mutation, color = splice_mutation)) +
+  geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.5) + 
+  facet_wrap("primary_disease") +
+  theme_bw() +
+  scale_color_manual(values = c("red","black")) +
+  xlab("") +
+  ylab("Sensitivity to drug (sd from median)") +
+  theme(axis.text.x = element_blank(),
+        legend.position = "bottom", 
+        ) + 
+    stat_compare_means(method = "t.test", label = "p.format", label.y = 2.5, label.x = 0.8)
+
+ggsave("../figures/results/msk_impact/drug/spliceAI_actionablegenes_drugsensitivity_ttest_PERCANCER.png", height = 10, width = 10)
+```
+
+
+

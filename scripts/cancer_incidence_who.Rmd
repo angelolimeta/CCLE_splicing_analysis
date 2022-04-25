@@ -1,0 +1,46 @@
+---
+title: "Cancer in society"
+output: html_notebook
+---
+
+Data from the WHO - International Agency for Research on Cancer. 
+
+Libraries
+```{r}
+library(tidyverse)
+library(readr)
+library(data.table)
+```
+
+Working directory
+```{r setup, include=FALSE, echo=FALSE}
+require("knitr")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/localdata")
+```
+
+Load data 
+```{r}
+data <- read_csv("cancer_incidence_who/data_all_cancers.csv")
+```
+
+Plot incidence
+```{r, fig.height=3, fig.width=5}
+data %>% 
+  ggplot(aes(x = reorder(Cancer, Incidence), y = Incidence)) +
+  geom_col(fill="black") +
+  ggtitle("Estimated age-standardized incidence rates world-wide in 2020, both sexes, all ages") +
+   theme_bw() +
+   theme(
+        legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) +
+  xlab(NULL) + 
+  ylab("Age-Standardised rate per 100 000 persons") + 
+  coord_flip()
+
+
+ggsave("../figures/exploration/world_incidence_rate.png", height = 6.5, width = 9.5)
+```
+

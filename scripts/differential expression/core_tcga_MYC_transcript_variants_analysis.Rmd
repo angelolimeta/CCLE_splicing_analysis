@@ -1,0 +1,431 @@
+---
+title: "Analysis of MYC-target transcript variants"
+author: "Angelo Limeta"
+date: "06/01/2021"
+output:
+  html_document:
+    df_print: kable
+    toc: true
+    toc_float: true
+---
+
+## Load libraries
+```{r,echo=FALSE}
+library(tidyverse)
+library(edgeR)
+library(EnsDb.Hsapiens.v86) # human transcript annotation data
+library(org.Hs.eg.db)
+library(gt)
+library(piano)
+library(snow)
+library(snowfall)
+library(hrbrthemes)
+library(ggrepel)
+library(data.table)
+library(ggpubr)
+
+select = dplyr::select
+mutate = dplyr::mutate
+rename = dplyr::rename
+filter = dplyr::filter
+```
+```{r}
+#transcript expression 
+df_trans = read_csv("../../../localdata/depmap/CCLE_RNAseq_transcripts.csv")
+
+#mutations and metadata
+CCLE_mutations <- fread("/Users/castilln/Desktop/thesis/localdata/depmap/CCLE_info", header = TRUE) 
+
+#LIST OF MUTATIONS FROM CCLE MUTATIONS THAT AFFECT THE SPLICEOSOME
+mutations_spliceosome = fread("/Users/castilln/Desktop/thesis/localdata/spliceosome/tcga_core_spliceosome_ccle_mutations.csv")
+
+#list of aggregated p values after linear model (before GSA)
+lancaster_pval = readRDS("/Users/castilln/Desktop/thesis/localdata/res_lancaster/core_tcga_p_values_lancaster.rds")
+```
+Contingency table - Annotation of cell lines with spliceosome mutations
+```{r}
+cell_lines_list = 
+  CCLE_mutations %>% 
+  select(stripped_cell_line_name, primary_disease, DepMap_ID) 
+
+cell_lines_list_mutated = 
+ cell_lines_list %>% 
+   mutate(spliceosome_mutated = 
+           case_when(
+            cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "YES", #if the mutation is in a gene from the spliceosome: 1 
+            !cell_lines_list$stripped_cell_line_name %in% mutations_spliceosome$stripped_cell_line_name ~ "NO")) %>% 
+  distinct()
+
+cell_lines_list_mutated %>% 
+  distinct() %>%
+  group_by(primary_disease,spliceosome_mutated) %>%
+  tally()
+
+table(distinct(cell_lines_list_mutated)$primary_disease,distinct(cell_lines_list_mutated)$spliceosome_mutated)
+
+spliceosome_mutated_ID = 
+  cell_lines_list_mutated %>% 
+  select(DepMap_ID, spliceosome_mutated) %>% 
+  distinct() 
+```
+
+```{r}
+#RENAME FIRST VARIABLE 
+transcripts = 
+  df_trans %>% 
+  dplyr::rename("DepMap_ID" = "X1")
+
+#JOIN TRANSCRIPT INFO WITH METADATA
+df_trans = 
+  transcripts %>% 
+  pivot_longer(cols=-DepMap_ID, names_to = "Gene", values_to = "log_TPM") %>% 
+  left_join(cell_lines_list_mutated, by = "DepMap_ID")
+
+head(df_trans)
+```
+
+```{r}
+#df_trans = 
+ # df_trans %>%
+  #  separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s") 
+   
+#df_trans$ensembl_id <- gsub("\\(|\\)","",as.character(median_counts$ensembl_id))
+
+```
+
+Extract those genes that are in the MYC hallmark gene set 
+
+Get list of genes in myc target gene sets 
+```{r}
+myc_target_v1 = fread("../../../localdata/gene_sets/myc/geneset_myc_target_v1.txt", header = F)
+myc_target_v2 = fread("../../../localdata/gene_sets/myc/geneset_myc_target_v2.txt", header = F)
+
+myc_target = rbind(myc_target_v1, myc_target_v2)
+
+myc_target = 
+  myc_target %>% 
+  unique() %>% 
+  as_vector()
+```
+
+Use grepl to get those genes in the gene set 
+```{r}
+matches <- unique(grep(paste(myc_target, collapse = "|"),
+                       df_trans$Gene, value = T))
+```
+
+Filter in df_trans for genes in "matches"
+```{r}
+df_filter = 
+  df_trans %>% 
+  filter(Gene %in% matches)
+```
+
+```{r}
+head(df_filter)
+```
+
+```{r}
+df_filter_sep = 
+  df_filter %>%
+    separate(col = "Gene", into = c("Hugo_Symbol", "ensembl_id"), sep = "\\s")
+
+df_filter_sep$ensembl_id <- gsub("\\(|\\)","",as.character(df_filter_sep$ensembl_id))
+
+head(df_filter_sep)
+```
+
+Get only those genes with significant differential expression (p.value < 0.05)
+```{r}
+pval_myc = 
+  lancaster_pval %>% 
+  filter(Hugo_Symbol %in% myc_target) %>% 
+  filter(p.value < 0.05)
+
+head(pval_myc)
+```
+
+Join p value with expression data
+```{r}
+df_filter_pval = 
+  df_filter_sep %>% 
+  inner_join(pval_myc, by = "Hugo_Symbol")
+
+head(df_filter_pval)
+```
+save as RDS
+```{r}
+saveRDS(df_filter_pval, "../../../localdata/res_lancaster/tcga_core_p_val_myc_targets.rds")
+```
+
+Get 5 genes with most significant p-values  
+```{r}
+most_sign = 
+  df_filter_pval %>% 
+  select(c("Hugo_Symbol",  "p.value")) %>% 
+  distinct() %>% 
+  slice_min(p.value, n = 10, with_ties =T) %>% 
+  select(Hugo_Symbol) %>% 
+  as_vector()
+
+df_filter_pval %>% 
+  select(c("Hugo_Symbol",  "p.value")) %>% 
+  distinct() %>% 
+  slice_min(p.value, n = 10, with_ties =T) 
+```
+
+
+```{r, fig.height=4, fig.width=6}
+df_filter_pval %>% 
+  slice_min(p.value, n=1, with_ties = T) %>% 
+  drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene RPS2")
+```
+Repeat for MYC 
+```{r, fig.height=6, fig.width=8}
+
+df_filter_pval %>% 
+filter(Hugo_Symbol == "RPS2") %>%   drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene RPS2")
+
+```
+
+```{r, fig.height=3, fig.width=3}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "RPS2") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000343262","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene RPS2")
+  
+```
+
+
+```{r, fig.height=12, fig.width=12}
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "COX5A") %>% drop_na(spliceosome_mutated) %>% 
+ggplot(aes(x = ensembl_id, y = log_TPM, fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene COX5A")
+```
+
+
+```{r}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "COX5A") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000322347","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene COX5A")
+```
+
+```{r, fig.height=12, fig.width=12}
+
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "RPLP0") %>% 
+  select(ensembl_id) %>% 
+  unique()
+
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "RNPS1") %>% 
+  drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45,hjust = 1),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene RNPS1")
+```
+
+```{r}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "RNPS1") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000565678","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene RNPS1")
+```
+
+```{r, fig.height=12, fig.width=12}
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "PABPC1") %>% 
+  drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() + 
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene PABPC1")
+```
+
+```{r}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "PABPC1") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000318607","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene PABPC1")
+```
+
+
+```{r, fig.height=12, fig.width=12}
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "EIF4A1") %>% 
+  drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() + 
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene EIF4A1")
+```
+
+```{r}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "EIF4A1") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000293831","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene EIF4A1")
+```
+
+
+
+```{r, fig.height=12, fig.width=12}
+df_filter_pval %>% 
+  filter(Hugo_Symbol == "TXNL4A") %>% 
+  drop_na(spliceosome_mutated) %>% 
+  ggplot(aes(x = ensembl_id, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() + 
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  ggtitle("log(TPM) expression of the isoforms of the gene TXNL4A")
+```
+
+```{r}
+df_filter_pval %>% 
+filter(Hugo_Symbol == "TXNL4A") %>% drop_na(spliceosome_mutated) %>% 
+  mutate(is_canon = ifelse(ensembl_id == "ENST00000269601","canonical","alternative")) %>% 
+  ggplot(aes(x = is_canon, y = log_TPM,fill = spliceosome_mutated)) + 
+  geom_boxplot() +
+  scale_fill_manual(values = c("NO" = "gray", "YES" = "red")) +
+  stat_compare_means(label = "p.signif",method = "wilcox.test") +
+  theme_bw() +
+  theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(), 
+        ) + 
+  xlab("") +
+  ggtitle("log(TPM) expression of the isoforms of the gene TXNL4A")
+```

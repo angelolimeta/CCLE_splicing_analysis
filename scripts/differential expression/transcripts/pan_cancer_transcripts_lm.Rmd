@@ -3,6 +3,8 @@ title: "Linear model for transcription expression data on multiple cancers"
 output: html_notebook
 ---
 
+Descritpion: linear model to identify differential expression between cell lines maintaining an unaltered spliceosome and cell lines with mutated splicing factors. Splicing factor list from combining KEGG and HGNC sources. 
+
 Load libraries
 ```{r}
 library(tidyverse)
@@ -90,6 +92,11 @@ keep <- c("Bone Cancer", "Fibroblast", "Leukemia", "Lung Cancer", "Ovarian Cance
 df_deseq = 
 long_transcripts_info %>% 
   filter(primary_disease %in% keep)
+
+df_deseq %>% 
+  filter(spliceosome_mutated == "NO") %>% 
+  select(DepMap_ID) %>% 
+  distinct() 
 ```
 
 Filter out those genes whose median for expression is lower than 1 across all samples

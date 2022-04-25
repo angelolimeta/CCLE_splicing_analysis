@@ -15,6 +15,7 @@ library(pROC)
 library(PRROC)
 library(hrbrthemes)
 library(viridis)
+library(ggbeeswarm)
 library(MLeval)
 select = dplyr::select
 rename = dplyr::rename
@@ -22,7 +23,7 @@ rename = dplyr::rename
 
 ```{r setup, include=FALSE, echo=FALSE}
 require("knitr")
-opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
+opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis/")
 ```
 
 
@@ -30,18 +31,26 @@ opts_knit$set(root.dir = "/Users/castilln/Desktop/thesis")
 ```{r}
 ##SPLICEAI PARSED OUTPUT
 data = fread("localdata/spliceai/output/spliceAI_out.csv")
-##CCLE MUTATIONS DATA
-CCLE = fread("localdata/depmap/CCLE_info")
+##ccle_meta MUTATIONS DATA
+ccle_meta = fread("localdata/depmap/ccle_info_21q1.csv")
 ```
 
+Join ccle_meta with metadata
+```{r}
+ccle_meta = 
+  ccle_meta %>% 
+  select(-V1)
+```
 
 ## Create unique ID for each SNP 
 ```{r}
 ##UNIQUE VARIABLE FOR SPLICEAI OUT
 udata = data[, id_var := paste(ID, SYMBOL, POS, REF, ALT, sep = "_"), by = .(ID, SYMBOL, POS, REF, ALT)]
 
-##UNIQUE VARIABLE FOR CCLE DATA
-uccle = CCLE[, id_var := paste(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+##UNIQUE VARIABLE FOR ccle_meta DATA
+uccle_meta = ccle_meta[, id_var := paste(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1, sep = "_"), by = .(stripped_cell_line_name, Hugo_Symbol, Start_position, Reference_Allele, Tumor_Seq_Allele1)]
+
+head(uccle_meta)
 ```
 
 
@@ -73,31 +82,32 @@ max_data =
 
 
 ## Annotation
-Let's see which mutations had already been annotated as splice variants in the CCLE
+Let's see which mutations had already been annotated as splice variants in the ccle_meta
 ```{r}
 ## GET LIST OF ALL VARIANT ANNOTATIONS
-CCLE %>% 
+ccle_meta %>% 
   pull(Variant_Classification) %>% 
   unique()
 
 ## GET ANNOTATION COLUMNS
-ann_ccle = 
-uccle %>%  
-  select(Hugo_Symbol, CCLE_Name, Variant_Classification, Variant_annotation, id_var, primary_disease)
+ann_ccle_meta = 
+uccle_meta %>%  
+  select(Hugo_Symbol, stripped_cell_line_name, Variant_Classification, Variant_annotation, id_var, primary_disease)
+
 
 ## FILTER FOR THOSE CLASSIFIED AS ALTERING A SPLICE SITE
-CCLE_splice = 
-  CCLE %>% 
+ccle_meta_splice = 
+  ccle_meta %>% 
     filter(Variant_Classification == "Splice_Site")
 ```
 
-Join CCLE annotation with spliceAI output
+Join ccle_meta annotation with spliceAI output
 ```{r}
 ## JOIN BY HUGO SYMBOL AND CELL LINE NAME
 ann_data = 
   max_data %>% 
-  left_join(ann_ccle, by = "id_var") %>% 
-  select(-c("Hugo_Symbol", "QUAL", "FILTER", "CCLE_Name")) #drop unnecessary variables
+  left_join(ann_ccle_meta, by = "id_var") %>% 
+  select(-c("Hugo_Symbol", "QUAL", "FILTER", "stripped_cell_line_name")) #drop unnecessary variables
 ```
 
 
@@ -111,7 +121,11 @@ roc_data =
     Variant_Classification != "Splice_Site" ~ 0
   )) %>% 
   mutate(MAX_PROBABILITY = as.numeric(MAX_PROBABILITY)) %>% 
-  drop_na()
+  drop_na() %>% 
+  mutate(PREDICTED = case_when(
+    MAX_PROBABILITY >= 0.5 ~ 1, 
+    MAX_PROBABILITY < 0.5 ~ 0 
+  ))
 
 head(roc_data)
 ```
@@ -123,24 +137,78 @@ rocobj <- roc(response = roc_data$splice_altering, predictor = roc_data$MAX_PROB
 
 ## PLOT 
 plot.roc(rocobj, print.auc = TRUE)
+
+# Extract AUC
+AUC_roc = as.double(auc(rocobj))/100
+
+p_roc = 
+  ggroc(rocobj, colour = "black") +
+  geom_segment(aes(x =100, xend = 0, y = 0, yend = 100),color = "grey") +
+  annotate("text", x = 25, y = 25, label = paste0("AUC = ", round(AUC_roc,2))) +
+  theme_bw() +
+  xlim(100,0) +
+  ylim(0,100) +
+  xlab("Specificity") +
+  ylab("Sensitivity") +
+  theme(aspect.ratio = 1)
+
+p_roc
 ```
 
 ## PRECISION RECALL CURVE
 
 ```{r}
-pr <- pr.curve(roc_data$MAX_PROBABILITY,roc_data$splice_altering, curve = T, max.compute = TRUE, 
-  min.compute = TRUE, rand.compute = TRUE)
+pr <- pr.curve(roc_data$MAX_PROBABILITY,roc_data$splice_altering, curve = T) 
 
-plot(pr, max.plot = TRUE, min.plot = TRUE, rand.plot = TRUE, fill.area = TRUE)
+# Extract and format data
+pr_data = pr$curve %>% 
+  as_tibble()
+colnames(pr_data) = c("Recall","Precision","Color")
+set.seed(1337)
+pr_data = sample_n(pr_data,1000) #subsample for easier plotting
+pr_data = 
+  pr_data %>% 
+  mutate(Recall = 100*Recall,
+         Precision = 100*Precision)
+pr_data = rbind(pr_data,c(0,0,0))
+
+# Add AUC
+AUC_pr = pr$auc.integral
+
+p_pr = 
+  pr_data %>% 
+  ggplot(aes(y=Precision,x=Recall)) +
+  geom_line() +
+  geom_segment(aes(x =0, xend = 100, y = 0, yend = 0),color = "grey") +
+  theme_bw() +
+  annotate("text", x = 75, y = 25, label = paste0("AUC = ", sprintf("%.2f",round(AUC_pr,3)))) +
+  #xlim(100,0) +
+  #ylim(0,100) +
+  theme(aspect.ratio = 1)
+  
+p_pr
 ```
+
+Combine plots
+```{r}
+library(patchwork)
+p_combined_auc = p_roc + p_pr
+p_combined_auc
+```
+Save plots
+```{r}
+ggsave(plot = p_combined_auc,file = "figures/results/spliceai/roc_pr.pdf")
+```
+
+
 
 ## Contingency table
 ```{r}
 cont_data = 
   roc_data %>% 
   mutate(predictor = case_when(
-    MAX_PROBABILITY >= 0.8 ~ "Max prob >= 0.8",
-    MAX_PROBABILITY < 0.8 ~ "Max prob < 0.8"
+    MAX_PROBABILITY >= 0.5 ~ "Max prob >= 0.5",
+    MAX_PROBABILITY < 0.5 ~ "Max prob < 0.5"
   )) %>% 
   mutate(pred_splice_altering = case_when(
     splice_altering == 1 ~ "Not annotated", 
@@ -176,24 +244,26 @@ roc_data =
     mutate(splice_altering = as.factor(splice_altering)) 
 
 
-ggplot(data = roc_data, aes(x = splice_altering, y = MAX_PROBABILITY)) +
+ggplot(data = roc_data, aes(x = splice_altering, y = MAX_PROBABILITY, fill = splice_altering)) +
   geom_violin(trim = F) + 
   scale_y_log10() +
+  scale_fill_manual(values = c("0" = "gray", "1" = "yellow")) + 
   theme_bw() +
   theme( 
         axis.ticks.x = element_blank(),
-        legend.position = "bottom",
+        legend.position = "none",
         plot.title = element_text(face = "bold"),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         panel.background = element_blank(), 
         ) +
   scale_x_discrete(labels=c("0" = "NO", "1" = "YES")) +
-  ylab("Predicted probability of being a splice altering mutation") + 
+  geom_hline(yintercept=0.5, linetype="dashed", color = "red") +
+  ylab("Probability of splice altering mutation") + 
   xlab("Splice altering") +
   stat_summary(fun.data = data_summary)
 
-
+ggsave("figures/results/spliceai/splice_altering_general.png", height = 3, width = 3)
 ```
 
 
@@ -208,11 +278,11 @@ data_all_cancers =
 ## MAKE SURE SPLICE_ALTERING IS A FACTOR
 ggplot(data = data_all_cancers, aes(x = splice_altering, y = MAX_PROBABILITY, fill = splice_altering)) +
   geom_violin(trim = F) +
-  geom_jitter(size=0.001) +
+  #geom_quasirandom(method = "pseudorandom",alpha = 0.5, size = 0.001) +
   scale_y_log10() +
   facet_wrap(facets = "primary_disease") +
   #facet_grid(. ~ primary_disease) +
-  scale_fill_viridis(discrete=T, name="Annotated as splice-altered variants based on RNA-Seq data", labels = c("NO", "YES")) +
+  scale_fill_manual(values = c("0" = "gray", "1" = "yellow"), name="Annotated as splice-altered variants based on RNA-Seq data", labels = c("NO", "YES")) +
   theme_bw() +
   theme(axis.text.x = element_blank(), 
         axis.ticks.x = element_blank(),
@@ -227,18 +297,20 @@ ggplot(data = data_all_cancers, aes(x = splice_altering, y = MAX_PROBABILITY, fi
   xlab("") +
   geom_hline(yintercept=0.5, linetype="dashed", color = "red") +
   stat_summary(fun.data = data_summary)
+
+ggsave("figures/results/spliceai/splice_altering_cancer.png", width = 11, height = 8)
 ```
 
 ```{r, include=FALSE}
-ggsave("figures/results/spliceai/spliceai_viz_probabilities_jitter.png", width = 10, height = 10)
+#ggsave("figures/results/spliceai/spliceai_viz_probabilities_jitter.png", width = 10, height = 10)
 ```
 
 
 ## Set  threshold and prepare table to present data
-Select information of interest from CCLE_splice
+Select information of interest from ccle_meta_splice
 ```{r}
 meta = 
-  uccle %>% 
+  uccle_meta %>% 
   select(c("DepMap_ID", "Annotation_Transcript", "id_var"))
 ```
 
@@ -252,11 +324,37 @@ ths5 =
   left_join(meta, by = "id_var") %>% 
   relocate(DepMap_ID)
 
+#GET LIST FROM ccle_meta
+list_ccle_meta = 
+  ccle_meta %>% 
+  select(DepMap_ID, stripped_cell_line_name, primary_disease) %>% 
+  distinct() %>% 
+  rename("CELL_LINE_NAME" = "stripped_cell_line_name")
 
-head(ths5)
+##ANNOTATE OFF TARGET SPLICE (i.e. if NA in DepMap_ID
+ths5_off = 
+  ths5 %>% 
+  mutate(off_target = ifelse(is.na(DepMap_ID), 1, 0)) %>% 
+  rename("CELL_LINE_NAME" = "ID") %>% 
+  select(-c("DepMap_ID", "primary_disease")) %>% 
+  left_join(list_ccle_meta, by = "CELL_LINE_NAME") %>% 
+  relocate(DepMap_ID, .before = CHROM)
+
+ths5_off %>% 
+  filter(off_target == 1) %>% 
+  dim()
 ```
+
 ```{r}
-saveRDS(ths5, file="github/results/spliceAI/ths5.rds")
+#INVESTIGATE REMAINING NA 
+na_depmap = 
+  is.na(ths5_off$DepMap_ID)
+
+why_na = ths5_off[na_depmap,]
+```
+
+```{r}
+saveRDS(ths5_off, file="github/results/spliceAI/ths5.rds")
 ```
 
 Threshold at 0.8 (max probability)
@@ -289,7 +387,7 @@ noID =
 Generate a list of primary disease based on cell line name
 ```{r}
 disease = 
-  CCLE %>% 
+  ccle_meta %>% 
   select(c("stripped_cell_line_name", "primary_disease")) %>% 
   distinct() %>% 
   rename("CELL_LINE" = "stripped_cell_line_name", 
@@ -314,16 +412,16 @@ Get SNPs in leukemia cell lines
 noID %>% 
   filter(DISEASE.x  == "Pancreatic Cancer")
 ```
-Let's try to relate each new predicted SNP with the SNP from CCLE
+Let's try to relate each new predicted SNP with the SNP from ccle_meta
 ```{r}
-CCLE %>% 
+ccle_meta %>% 
   filter(stripped_cell_line_name == "L33")
 ```
 
 
 Let's try to verify that those alterations predicted by spliceAI that lack a DepMap ID are not present in the mutations df
 ```{r}
-head(CCLE_mutations)
+head(ccle_meta_mutations)
 ```
 
 
